@@ -14,10 +14,10 @@ int _fltused;
 // - Rotate the ship with the arrow keys
 // - Move the ship forward with the up arrow key
 // - Allow ship to go off one side of the screen and appear on the other side
-
-// TODO:
 // - Fire a small rectangle from the front of the ship when the user
 //   hits the spacebar
+
+// TODO:
 // - Draw meteor on the screen as a circle
 // - Give the meteor a random radius
 // - Give the meteor a velocity in a random direction
@@ -322,6 +322,32 @@ LRESULT CALLBACK WindowCallback(
 	return 0;
 }
 
+void RotatePoints(Point *points, i32 point_count, Point center_of_rotation, f32 rotation_amount) {
+	for (i32 i = 0; i < point_count; i++) {
+		Point *p = points + i;
+
+		// Orient the points so that they are relative to the point of rotation
+		Point reoriented = { p->x - center_of_rotation.x, p->y - center_of_rotation.y };
+		f32 radius = my_sqrt(((reoriented.x * reoriented.x) + (reoriented.y * reoriented.y)));
+
+		// Calculate the angle that the points are currently at
+		//   NOTE: Using atan2 because it takes the sign of the coordinates into account
+		//         giving the actual angle. Other trignometric functions are only defined
+		//         for specific angle ranges, so some offset needs to be applied. atan2
+		//         takes does the offset for us so we don't have to worry about it.
+		f32 theta = my_atan2(reoriented.y, reoriented.x);
+		
+		// Calculate new x component using with x = r * cos(original_angle + additional_rotation)
+		p->x = radius * my_cos(theta + rotation_amount);
+		// // Calculate new y component using with y = r * sin(original_angle + additional_rotation)
+		p->y = radius * my_sin(theta + rotation_amount);
+
+		// Orient the resulting points so that they are relative to the original origin point
+		p->x += center_of_rotation.x;
+		p->y += center_of_rotation.y;
+	}
+}
+
 typedef struct {
 	Point points[4];
 	Vec2 direction;
@@ -387,21 +413,10 @@ int WinMainCRTStartup() {
 	f32 ship_pos_x = (gBackbuffer.bitmapInfo.bmiHeader.biWidth / 2.0f);
 	f32 ship_pos_y = (gBackbuffer.bitmapInfo.bmiHeader.biHeight / 2.0f);
 
-#define MAX_ACTIVE_MISSILE_COUNT 16
-	Missile pool_of_missiles[MAX_ACTIVE_MISSILE_COUNT] = {0};
-
-	i32 missile_active = 0;
+#define MISSILE_POOL_SIZE 16
+	Missile pool_of_missiles[MISSILE_POOL_SIZE] = {0};
 	f32 missile_width = 4.0f;
 	f32 missile_height = 8.0f;
-
-	Point missile_points[] = {
-		{ .x = 0, .y = 0 },
-		{ .x = 0, .y = missile_height },
-		{ .x = missile_width, .y = missile_height },
-		{ .x = missile_width, .y = 0 }
-	};
-
-	Vec2 missile_direction = {0};
 
 	MSG msg = {0};
 	while (!gShouldCloseWindow) {
@@ -427,35 +442,7 @@ int WinMainCRTStartup() {
 
 		// Use triangle centroid as the center of rotation
 		Point rotation_origin = Centroid(ship_triangle);
-
-		// reorient points
-		Point a_reorient = { (f32)(ship_triangle.a.x - rotation_origin.x), (f32)(ship_triangle.a.y - rotation_origin.y) };
-		Point b_reorient = { (f32)(ship_triangle.b.x - rotation_origin.x), (f32)(ship_triangle.b.y - rotation_origin.y) };
-		Point c_reorient = { (f32)(ship_triangle.c.x - rotation_origin.x), (f32)(ship_triangle.c.y - rotation_origin.y) };
-
-		f32 radius_a = my_sqrt(((a_reorient.x * a_reorient.x) + (a_reorient.y * a_reorient.y)));
-		f32 radius_b = my_sqrt(((b_reorient.x * b_reorient.x) + (b_reorient.y * b_reorient.y)));
-		f32 radius_c = my_sqrt(((c_reorient.x * c_reorient.x) + (c_reorient.y * c_reorient.y)));
-
-		f32 theta_a = my_atan2(a_reorient.y, a_reorient.x);
-		f32 theta_b = my_atan2(b_reorient.y, b_reorient.x);
-		f32 theta_c = my_atan2(c_reorient.y, c_reorient.x);
-
-		f32 rot_a_x = radius_a * my_cos(theta_a + ship_rotation_radians);
-		f32 rot_b_x = radius_b * my_cos(theta_b + ship_rotation_radians);
-		f32 rot_c_x = radius_c * my_cos(theta_c + ship_rotation_radians);
-
-		f32 rot_a_y = radius_a * my_sin(theta_a + ship_rotation_radians);
-		f32 rot_b_y = radius_b * my_sin(theta_b + ship_rotation_radians);
-		f32 rot_c_y = radius_c * my_sin(theta_c + ship_rotation_radians);
-
-		Point rot_a = { (rot_a_x + rotation_origin.x), (rot_a_y + rotation_origin.y) };
-		Point rot_b = { (rot_b_x + rotation_origin.x), (rot_b_y + rotation_origin.y) };
-		Point rot_c = { (rot_c_x + rotation_origin.x), (rot_c_y + rotation_origin.y) };
-
-		ship_triangle.a = rot_a;
-		ship_triangle.b = rot_b;
-		ship_triangle.c = rot_c;
+		RotatePoints((Point*)&ship_triangle, 3, rotation_origin, ship_rotation_radians);
 		
 		Point ship_center = Centroid(ship_triangle);
 		Vec2 ship_forward_direction = {0};
@@ -523,7 +510,7 @@ int WinMainCRTStartup() {
 		///////////////////////////////////////////////
 		///////////////////////////////////////////////
 
-		for (i32 i = 0; i < MAX_ACTIVE_MISSILE_COUNT; i++) {
+		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
 			Missile *missile = pool_of_missiles + i;
 
 			f32 missile_delta_x = 6.0f * missile->direction.x;
@@ -556,7 +543,7 @@ int WinMainCRTStartup() {
 
 		if (gShootMissile) {
 			Missile *new_missile = 0;
-			for (i32 i = 0; i < MAX_ACTIVE_MISSILE_COUNT; i++) {
+			for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
 				Missile *m = pool_of_missiles + i;
 				if (!m->live) {
 					new_missile = m;
@@ -565,75 +552,23 @@ int WinMainCRTStartup() {
 			}
 
 			if (new_missile) {
+				// set the missile points(the missile may be reused)
 				new_missile->points[0].x = 0;
 				new_missile->points[0].y = 0;
-
 				new_missile->points[1].x = 0;
 				new_missile->points[1].y = missile_height;
-
 				new_missile->points[2].x = missile_width;
 				new_missile->points[2].y = missile_height;
-
 				new_missile->points[3].x = missile_width;
 				new_missile->points[3].y = 0;
 
-				//////////////////////////////////////
-				/// Rotate Missile
-				///
-
+				// rotate the missile so it's in the same direction as the ship
 				Point missile_center = {0};
 				missile_center.x = missile_width / 2.0f;
 				missile_center.y = missile_height / 2.0f;
+				RotatePoints(new_missile->points, 4, missile_center, ship_rotation_radians);
 
-				// Rotate the points of the missile so that it is 
-				// moving in the forward direction of the ship.
-
-				// Orient the points so that they are relative to the point of rotation
-				Point a_reorient = { (f32)(new_missile->points[0].x - missile_center.x), (f32)(new_missile->points[0].y - missile_center.y) };
-				Point b_reorient = { (f32)(new_missile->points[1].x - missile_center.x), (f32)(new_missile->points[1].y - missile_center.y) };
-				Point c_reorient = { (f32)(new_missile->points[2].x - missile_center.x), (f32)(new_missile->points[2].y - missile_center.y) };
-				Point d_reorient = { (f32)(new_missile->points[3].x - missile_center.x), (f32)(new_missile->points[3].y - missile_center.y) };
-
-				f32 radius_a = my_sqrt(((a_reorient.x * a_reorient.x) + (a_reorient.y * a_reorient.y)));
-				f32 radius_b = my_sqrt(((b_reorient.x * b_reorient.x) + (b_reorient.y * b_reorient.y)));
-				f32 radius_c = my_sqrt(((c_reorient.x * c_reorient.x) + (c_reorient.y * c_reorient.y)));
-				f32 radius_d = my_sqrt(((d_reorient.x * d_reorient.x) + (d_reorient.y * d_reorient.y)));
-
-				// Calculate the angle that the points are currently at
-				//   NOTE: Using atan2 because it takes the sign of the coordinates into account
-				//         giving the actual angle. Other trignometric functions are only defined
-				//         for specific angle ranges, so some offset needs to be applied. atan2
-				//         takes does the offset for us so we don't have to worry about it.
-				f32 theta_a = my_atan2(a_reorient.y, a_reorient.x);
-				f32 theta_b = my_atan2(b_reorient.y, b_reorient.x);
-				f32 theta_c = my_atan2(c_reorient.y, c_reorient.x);
-				f32 theta_d = my_atan2(d_reorient.y, d_reorient.x);
-
-				// Calculate new x component using with x = r * cos(original_angle + additional_rotation)
-				f32 rot_a_x = radius_a * my_cos(theta_a + ship_rotation_radians);
-				f32 rot_b_x = radius_b * my_cos(theta_b + ship_rotation_radians);
-				f32 rot_c_x = radius_c * my_cos(theta_c + ship_rotation_radians);
-				f32 rot_d_x = radius_d * my_cos(theta_d + ship_rotation_radians);
-
-				// Calculate new y component using with y = r * sin(original_angle + additional_rotation)
-				f32 rot_a_y = radius_a * my_sin(theta_a + ship_rotation_radians);
-				f32 rot_b_y = radius_b * my_sin(theta_b + ship_rotation_radians);
-				f32 rot_c_y = radius_c * my_sin(theta_c + ship_rotation_radians);
-				f32 rot_d_y = radius_d * my_sin(theta_d + ship_rotation_radians);
-
-				// Orient the resulting points so that they are relative to the original origin point
-				Point rot_a = { (rot_a_x + missile_center.x), (rot_a_y + missile_center.y) };
-				Point rot_b = { (rot_b_x + missile_center.x), (rot_b_y + missile_center.y) };
-				Point rot_c = { (rot_c_x + missile_center.x), (rot_c_y + missile_center.y) };
-				Point rot_d = { (rot_d_x + missile_center.x), (rot_d_y + missile_center.y) };
-
-				new_missile->points[0] = rot_a;
-				new_missile->points[1] = rot_b;
-				new_missile->points[2] = rot_c;
-				new_missile->points[3] = rot_d;
-				//////////////////////////////////////
-				//////////////////////////////////////
-
+				// put the missile at the tip of the ship
 				new_missile->points[0].x += ship_triangle.b.x;
 				new_missile->points[0].y += ship_triangle.b.y;
 				new_missile->points[1].x += ship_triangle.b.x;
@@ -674,7 +609,7 @@ int WinMainCRTStartup() {
 			}
 		}
 		
-		for (i32 i = 0; i < MAX_ACTIVE_MISSILE_COUNT; i++) {
+		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
 			Missile missile = pool_of_missiles[i];
 
 			// constrain how the number of points to check that in a the missile rectangle
@@ -771,4 +706,3 @@ int WinMainCRTStartup() {
 
     return 0;
 }
-
