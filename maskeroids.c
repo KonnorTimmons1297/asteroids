@@ -322,6 +322,12 @@ LRESULT CALLBACK WindowCallback(
 	return 0;
 }
 
+typedef struct {
+	Point points[4];
+	Vec2 direction;
+	i32 live;
+} Missile;
+
 int WinMainCRTStartup() {
 	HINSTANCE hInstance = GetModuleHandle(0);
 
@@ -380,6 +386,9 @@ int WinMainCRTStartup() {
 	f32 ship_rotation_radians = 0;
 	f32 ship_pos_x = (gBackbuffer.bitmapInfo.bmiHeader.biWidth / 2.0f);
 	f32 ship_pos_y = (gBackbuffer.bitmapInfo.bmiHeader.biHeight / 2.0f);
+
+#define MAX_ACTIVE_MISSILE_COUNT 16
+	Missile pool_of_missiles[MAX_ACTIVE_MISSILE_COUNT] = {0};
 
 	i32 missile_active = 0;
 	f32 missile_width = 4.0f;
@@ -514,104 +523,132 @@ int WinMainCRTStartup() {
 		///////////////////////////////////////////////
 		///////////////////////////////////////////////
 
+		for (i32 i = 0; i < MAX_ACTIVE_MISSILE_COUNT; i++) {
+			Missile *missile = pool_of_missiles + i;
+
+			f32 missile_delta_x = 6.0f * missile->direction.x;
+			f32 missile_delta_y = 6.0f * missile->direction.y;
+			
+			missile->points[0].x += missile_delta_x;
+			missile->points[0].y += missile_delta_y;
+
+			missile->points[1].x += missile_delta_x;
+			missile->points[1].y += missile_delta_y;
+
+			missile->points[2].x += missile_delta_x;
+			missile->points[2].y += missile_delta_y;
+
+			missile->points[3].x += missile_delta_x;
+			missile->points[3].y += missile_delta_y;
+
+			i32 missile_min_x = my_floor(my_min(missile->points[0].x, my_min(missile->points[1].x, my_min(missile->points[2].x, missile->points[3].x))));
+			i32 missile_max_x = my_ceil(my_max(missile->points[0].x, my_max(missile->points[1].x, my_max(missile->points[2].x, missile->points[3].x))));
+			i32 missile_min_y = my_floor(my_min(missile->points[0].y, my_min(missile->points[1].y, my_min(missile->points[2].y, missile->points[3].y))));
+			i32 missile_max_y = my_ceil(my_max(missile->points[0].y, my_max(missile->points[1].y, my_max(missile->points[2].y, missile->points[3].y))));
+
+			if ((missile_min_x < 0 && missile_max_x < 0) || 
+				(missile_min_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth || missile_max_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth) ||
+				(missile_min_y < 0 && missile_max_y < 0) ||
+				(missile_min_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight || missile_max_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight)) {
+					missile->live = 0;
+			}
+		}
+
 		if (gShootMissile) {
-			missile_points[0].x = 0;
-			missile_points[0].y = 0;
+			Missile *new_missile = 0;
+			for (i32 i = 0; i < MAX_ACTIVE_MISSILE_COUNT; i++) {
+				Missile *m = pool_of_missiles + i;
+				if (!m->live) {
+					new_missile = m;
+					break;
+				}
+			}
 
-			missile_points[1].x = 0;
-			missile_points[1].y = missile_height;
+			if (new_missile) {
+				new_missile->points[0].x = 0;
+				new_missile->points[0].y = 0;
 
-			missile_points[2].x = missile_width;
-			missile_points[2].y = missile_height;
+				new_missile->points[1].x = 0;
+				new_missile->points[1].y = missile_height;
 
-			missile_points[3].x = missile_width;
-			missile_points[3].y = 0;
+				new_missile->points[2].x = missile_width;
+				new_missile->points[2].y = missile_height;
 
-			//////////////////////////////////////
-			/// Rotate Missile
-			///
+				new_missile->points[3].x = missile_width;
+				new_missile->points[3].y = 0;
 
-			Point missile_center = {0};
-			missile_center.x = missile_width / 2.0f;
-			missile_center.y = missile_height / 2.0f;
+				//////////////////////////////////////
+				/// Rotate Missile
+				///
 
-			// Rotate the points of the missile so that it is 
-			// moving in the forward direction of the ship.
+				Point missile_center = {0};
+				missile_center.x = missile_width / 2.0f;
+				missile_center.y = missile_height / 2.0f;
 
-			// Orient the points so that they are relative to the point of rotation
-			Point a_reorient = { (f32)(missile_points[0].x - missile_center.x), (f32)(missile_points[0].y - missile_center.y) };
-			Point b_reorient = { (f32)(missile_points[1].x - missile_center.x), (f32)(missile_points[1].y - missile_center.y) };
-			Point c_reorient = { (f32)(missile_points[2].x - missile_center.x), (f32)(missile_points[2].y - missile_center.y) };
-			Point d_reorient = { (f32)(missile_points[3].x - missile_center.x), (f32)(missile_points[3].y - missile_center.y) };
+				// Rotate the points of the missile so that it is 
+				// moving in the forward direction of the ship.
 
-			f32 radius_a = my_sqrt(((a_reorient.x * a_reorient.x) + (a_reorient.y * a_reorient.y)));
-			f32 radius_b = my_sqrt(((b_reorient.x * b_reorient.x) + (b_reorient.y * b_reorient.y)));
-			f32 radius_c = my_sqrt(((c_reorient.x * c_reorient.x) + (c_reorient.y * c_reorient.y)));
-			f32 radius_d = my_sqrt(((d_reorient.x * d_reorient.x) + (d_reorient.y * d_reorient.y)));
+				// Orient the points so that they are relative to the point of rotation
+				Point a_reorient = { (f32)(new_missile->points[0].x - missile_center.x), (f32)(new_missile->points[0].y - missile_center.y) };
+				Point b_reorient = { (f32)(new_missile->points[1].x - missile_center.x), (f32)(new_missile->points[1].y - missile_center.y) };
+				Point c_reorient = { (f32)(new_missile->points[2].x - missile_center.x), (f32)(new_missile->points[2].y - missile_center.y) };
+				Point d_reorient = { (f32)(new_missile->points[3].x - missile_center.x), (f32)(new_missile->points[3].y - missile_center.y) };
 
-			// Calculate the angle that the points are currently at
-			//   NOTE: Using atan2 because it takes the sign of the coordinates into account
-			//         giving the actual angle. Other trignometric functions are only defined
-			//         for specific angle ranges, so some offset needs to be applied. atan2
-			//         takes does the offset for us so we don't have to worry about it.
-			f32 theta_a = my_atan2(a_reorient.y, a_reorient.x);
-			f32 theta_b = my_atan2(b_reorient.y, b_reorient.x);
-			f32 theta_c = my_atan2(c_reorient.y, c_reorient.x);
-			f32 theta_d = my_atan2(d_reorient.y, d_reorient.x);
+				f32 radius_a = my_sqrt(((a_reorient.x * a_reorient.x) + (a_reorient.y * a_reorient.y)));
+				f32 radius_b = my_sqrt(((b_reorient.x * b_reorient.x) + (b_reorient.y * b_reorient.y)));
+				f32 radius_c = my_sqrt(((c_reorient.x * c_reorient.x) + (c_reorient.y * c_reorient.y)));
+				f32 radius_d = my_sqrt(((d_reorient.x * d_reorient.x) + (d_reorient.y * d_reorient.y)));
 
-			// Calculate new x component using with x = r * cos(original_angle + additional_rotation)
-			f32 rot_a_x = radius_a * my_cos(theta_a + ship_rotation_radians);
-			f32 rot_b_x = radius_b * my_cos(theta_b + ship_rotation_radians);
-			f32 rot_c_x = radius_c * my_cos(theta_c + ship_rotation_radians);
-			f32 rot_d_x = radius_d * my_cos(theta_d + ship_rotation_radians);
+				// Calculate the angle that the points are currently at
+				//   NOTE: Using atan2 because it takes the sign of the coordinates into account
+				//         giving the actual angle. Other trignometric functions are only defined
+				//         for specific angle ranges, so some offset needs to be applied. atan2
+				//         takes does the offset for us so we don't have to worry about it.
+				f32 theta_a = my_atan2(a_reorient.y, a_reorient.x);
+				f32 theta_b = my_atan2(b_reorient.y, b_reorient.x);
+				f32 theta_c = my_atan2(c_reorient.y, c_reorient.x);
+				f32 theta_d = my_atan2(d_reorient.y, d_reorient.x);
 
-			// Calculate new y component using with y = r * sin(original_angle + additional_rotation)
-			f32 rot_a_y = radius_a * my_sin(theta_a + ship_rotation_radians);
-			f32 rot_b_y = radius_b * my_sin(theta_b + ship_rotation_radians);
-			f32 rot_c_y = radius_c * my_sin(theta_c + ship_rotation_radians);
-			f32 rot_d_y = radius_d * my_sin(theta_d + ship_rotation_radians);
+				// Calculate new x component using with x = r * cos(original_angle + additional_rotation)
+				f32 rot_a_x = radius_a * my_cos(theta_a + ship_rotation_radians);
+				f32 rot_b_x = radius_b * my_cos(theta_b + ship_rotation_radians);
+				f32 rot_c_x = radius_c * my_cos(theta_c + ship_rotation_radians);
+				f32 rot_d_x = radius_d * my_cos(theta_d + ship_rotation_radians);
 
-			// Orient the resulting points so that they are relative to the original origin point
-			Point rot_a = { (rot_a_x + missile_center.x), (rot_a_y + missile_center.y) };
-			Point rot_b = { (rot_b_x + missile_center.x), (rot_b_y + missile_center.y) };
-			Point rot_c = { (rot_c_x + missile_center.x), (rot_c_y + missile_center.y) };
-			Point rot_d = { (rot_d_x + missile_center.x), (rot_d_y + missile_center.y) };
+				// Calculate new y component using with y = r * sin(original_angle + additional_rotation)
+				f32 rot_a_y = radius_a * my_sin(theta_a + ship_rotation_radians);
+				f32 rot_b_y = radius_b * my_sin(theta_b + ship_rotation_radians);
+				f32 rot_c_y = radius_c * my_sin(theta_c + ship_rotation_radians);
+				f32 rot_d_y = radius_d * my_sin(theta_d + ship_rotation_radians);
 
-			missile_points[0] = rot_a;
-			missile_points[1] = rot_b;
-			missile_points[2] = rot_c;
-			missile_points[3] = rot_d;
-			//////////////////////////////////////
-			//////////////////////////////////////
+				// Orient the resulting points so that they are relative to the original origin point
+				Point rot_a = { (rot_a_x + missile_center.x), (rot_a_y + missile_center.y) };
+				Point rot_b = { (rot_b_x + missile_center.x), (rot_b_y + missile_center.y) };
+				Point rot_c = { (rot_c_x + missile_center.x), (rot_c_y + missile_center.y) };
+				Point rot_d = { (rot_d_x + missile_center.x), (rot_d_y + missile_center.y) };
 
-			missile_points[0].x += ship_triangle.b.x;
-			missile_points[0].y += ship_triangle.b.y;
-			missile_points[1].x += ship_triangle.b.x;
-			missile_points[1].y += ship_triangle.b.y;
-			missile_points[2].x += ship_triangle.b.x;
-			missile_points[2].y += ship_triangle.b.y;
-			missile_points[3].x += ship_triangle.b.x;
-			missile_points[3].y += ship_triangle.b.y;
+				new_missile->points[0] = rot_a;
+				new_missile->points[1] = rot_b;
+				new_missile->points[2] = rot_c;
+				new_missile->points[3] = rot_d;
+				//////////////////////////////////////
+				//////////////////////////////////////
 
-			missile_direction = ship_forward_direction;
+				new_missile->points[0].x += ship_triangle.b.x;
+				new_missile->points[0].y += ship_triangle.b.y;
+				new_missile->points[1].x += ship_triangle.b.x;
+				new_missile->points[1].y += ship_triangle.b.y;
+				new_missile->points[2].x += ship_triangle.b.x;
+				new_missile->points[2].y += ship_triangle.b.y;
+				new_missile->points[3].x += ship_triangle.b.x;
+				new_missile->points[3].y += ship_triangle.b.y;
 
-			missile_active = 1;
+				new_missile->direction = ship_forward_direction;
+
+				new_missile->live = 1;
+			}
+
 			gShootMissile = 0;
-		} else if (missile_active) {
-			f32 missile_delta_x = 6.0f * missile_direction.x;
-			f32 missile_delta_y = 6.0f * missile_direction.y;
-
-			missile_points[0].x += missile_delta_x;
-			missile_points[0].y += missile_delta_y;
-
-			missile_points[1].x += missile_delta_x;
-			missile_points[1].y += missile_delta_y;
-
-			missile_points[2].x += missile_delta_x;
-			missile_points[2].y += missile_delta_y;
-
-			missile_points[3].x += missile_delta_x;
-			missile_points[3].y += missile_delta_y;
 		}
 
 		// Clear background
@@ -637,12 +674,14 @@ int WinMainCRTStartup() {
 			}
 		}
 		
-		if (missile_active) {
+		for (i32 i = 0; i < MAX_ACTIVE_MISSILE_COUNT; i++) {
+			Missile missile = pool_of_missiles[i];
+
 			// constrain how the number of points to check that in a the missile rectangle
-			i32 missile_min_x = my_floor(my_min(missile_points[0].x, my_min(missile_points[1].x, my_min(missile_points[2].x, missile_points[3].x))));
-			i32 missile_max_x = my_ceil(my_max(missile_points[0].x, my_max(missile_points[1].x, my_max(missile_points[2].x, missile_points[3].x))));
-			i32 missile_min_y = my_floor(my_min(missile_points[0].y, my_min(missile_points[1].y, my_min(missile_points[2].y, missile_points[3].y))));
-			i32 missile_max_y = my_ceil(my_max(missile_points[0].y, my_max(missile_points[1].y, my_max(missile_points[2].y, missile_points[3].y))));
+			i32 missile_min_x = my_floor(my_min(missile.points[0].x, my_min(missile.points[1].x, my_min(missile.points[2].x, missile.points[3].x))));
+			i32 missile_max_x = my_ceil(my_max(missile.points[0].x, my_max(missile.points[1].x, my_max(missile.points[2].x, missile.points[3].x))));
+			i32 missile_min_y = my_floor(my_min(missile.points[0].y, my_min(missile.points[1].y, my_min(missile.points[2].y, missile.points[3].y))));
+			i32 missile_max_y = my_ceil(my_max(missile.points[0].y, my_max(missile.points[1].y, my_max(missile.points[2].y, missile.points[3].y))));
 
 			// NOTE: Rasterize the rectangle by checking if a point is inside the rectangle. Do so
 			//       by constructing vectors representing the sides of the rectangle, and a vector
@@ -651,18 +690,18 @@ int WinMainCRTStartup() {
 			//       length is within the respective range, then the point is inside the triangle.
 
 			Vec2 ab = {0};
-			ab.x = missile_points[1].x - missile_points[0].x;
-			ab.y = missile_points[1].y - missile_points[0].y;
+			ab.x = missile.points[1].x - missile.points[0].x;
+			ab.y = missile.points[1].y - missile.points[0].y;
 			f32 dot_ab_ab = (ab.x * ab.x) + (ab.y * ab.y);
 
 			Vec2 ad = {0};
-			ad.x = missile_points[3].x - missile_points[0].x;
-			ad.y = missile_points[3].y - missile_points[0].y;
+			ad.x = missile.points[3].x - missile.points[0].x;
+			ad.y = missile.points[3].y - missile.points[0].y;
 			f32 dot_ad_ad = (ad.x * ad.x) + (ad.y * ad.y);
 
 			for (i32 y = missile_min_y; y < missile_max_y; y++) {
 				for (i32 x = missile_min_x; x < missile_max_x; x++) {
-					Vec2 am = { .x = (x - missile_points[0].x), .y = (y - missile_points[0].y) };
+					Vec2 am = { .x = (x - missile.points[0].x), .y = (y - missile.points[0].y) };
 
 					f32 dot_am_ab = (am.x * ab.x) + (am.y * ab.y);
 					if (dot_am_ab < 0 || dot_am_ab > dot_ab_ab) {
@@ -684,6 +723,7 @@ int WinMainCRTStartup() {
 					*pixel = 0xFFFFFFFF;
 				}
 			}
+
 		}
 
 #if DEBUG_SHIP_FORWARD_VECTOR
