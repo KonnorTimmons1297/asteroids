@@ -322,6 +322,37 @@ LRESULT CALLBACK WindowCallback(
 	return 0;
 }
 
+typedef struct {
+	i32 min_x, max_x;
+	i32 min_y, max_y;
+} Extents;
+
+Extents CalculateExtents(Point *points, i32 point_count) {
+	Extents result = {0};
+
+	// Assert(point_count >= 2);
+
+	f32 min_x = points->x;
+	f32 max_x = points->x;
+	f32 min_y = points->y;
+	f32 max_y = points->y;
+
+	for (i32 i = 1; i < point_count; i++) {
+		Point *p = points + i;
+		min_x = my_min(min_x, p->x);
+		max_x = my_max(max_x, p->x);
+		min_y = my_min(min_y, p->y);
+		max_y = my_max(max_y, p->y);
+	}
+
+	result.min_x = my_floor(min_x);
+	result.max_x = my_ceil(max_x);
+	result.min_y = my_floor(min_y);
+	result.max_y = my_ceil(max_y);
+
+	return result;
+}
+
 void RotatePoints(Point *points, i32 point_count, Point center_of_rotation, f32 rotation_amount) {
 	for (i32 i = 0; i < point_count; i++) {
 		Point *p = points + i;
@@ -345,6 +376,14 @@ void RotatePoints(Point *points, i32 point_count, Point center_of_rotation, f32 
 		// Orient the resulting points so that they are relative to the original origin point
 		p->x += center_of_rotation.x;
 		p->y += center_of_rotation.y;
+	}
+}
+
+void TranslatePoints(Point *points, i32 point_count, f32 translation_x, f32 translation_y) {
+	for (i32 i = 0; i < point_count; i++) {
+		Point *p = points + i;
+		p->x += translation_x;
+		p->y += translation_y;
 	}
 }
 
@@ -413,7 +452,7 @@ int WinMainCRTStartup() {
 	f32 ship_pos_x = (gBackbuffer.bitmapInfo.bmiHeader.biWidth / 2.0f);
 	f32 ship_pos_y = (gBackbuffer.bitmapInfo.bmiHeader.biHeight / 2.0f);
 
-#define MISSILE_POOL_SIZE 16
+#define MISSILE_POOL_SIZE 8
 	Missile pool_of_missiles[MISSILE_POOL_SIZE] = {0};
 	f32 missile_width = 4.0f;
 	f32 missile_height = 8.0f;
@@ -464,12 +503,9 @@ int WinMainCRTStartup() {
 		}
 
 		{
-			i32 min_x = my_floor(my_min(ship_triangle.a.x, my_min(ship_triangle.b.x, ship_triangle.c.x)));
-			i32 max_x = my_ceil(my_max(ship_triangle.a.x, my_max(ship_triangle.b.x, ship_triangle.c.x)));
-			i32 min_y = my_floor(my_min(ship_triangle.a.y, my_min(ship_triangle.b.y, ship_triangle.c.y)));
-			i32 max_y = my_ceil(my_max(ship_triangle.a.y, my_max(ship_triangle.b.y, ship_triangle.c.y)));
-			i32 ship_draw_area_width = max_x - min_x;
-			i32 ship_draw_area_height = max_y - min_y;	
+			Extents e = CalculateExtents((Point*)&ship_triangle, 3);
+			i32 ship_draw_area_width = e.max_x - e.min_x;
+			i32 ship_draw_area_height = e.max_y - e.min_y;	
 
 			// don't check <= because ship_pos_x will be equal if
 			// it goes off the right side of the screen
@@ -492,14 +528,7 @@ int WinMainCRTStartup() {
 			}
 		}
 
-		ship_triangle.a.x += ship_pos_x;
-		ship_triangle.a.y += ship_pos_y;
-
-		ship_triangle.b.x += ship_pos_x;
-		ship_triangle.b.y += ship_pos_y;
-
-		ship_triangle.c.x += ship_pos_x;
-		ship_triangle.c.y += ship_pos_y;
+		TranslatePoints((Point*)&ship_triangle, 3, ship_pos_x, ship_pos_y);
 
 		ship_center = Centroid(ship_triangle);
 		ship_forward_direction.x = ship_triangle.b.x - ship_center.x;
@@ -513,30 +542,20 @@ int WinMainCRTStartup() {
 		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
 			Missile *missile = pool_of_missiles + i;
 
+			if (!missile->live) continue;
+
 			f32 missile_delta_x = 6.0f * missile->direction.x;
 			f32 missile_delta_y = 6.0f * missile->direction.y;
-			
-			missile->points[0].x += missile_delta_x;
-			missile->points[0].y += missile_delta_y;
 
-			missile->points[1].x += missile_delta_x;
-			missile->points[1].y += missile_delta_y;
+			TranslatePoints(missile->points, 4, missile_delta_x, missile_delta_y);
 
-			missile->points[2].x += missile_delta_x;
-			missile->points[2].y += missile_delta_y;
+			Extents e = CalculateExtents(missile->points, 4);
 
-			missile->points[3].x += missile_delta_x;
-			missile->points[3].y += missile_delta_y;
-
-			i32 missile_min_x = my_floor(my_min(missile->points[0].x, my_min(missile->points[1].x, my_min(missile->points[2].x, missile->points[3].x))));
-			i32 missile_max_x = my_ceil(my_max(missile->points[0].x, my_max(missile->points[1].x, my_max(missile->points[2].x, missile->points[3].x))));
-			i32 missile_min_y = my_floor(my_min(missile->points[0].y, my_min(missile->points[1].y, my_min(missile->points[2].y, missile->points[3].y))));
-			i32 missile_max_y = my_ceil(my_max(missile->points[0].y, my_max(missile->points[1].y, my_max(missile->points[2].y, missile->points[3].y))));
-
-			if ((missile_min_x < 0 && missile_max_x < 0) || 
-				(missile_min_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth || missile_max_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth) ||
-				(missile_min_y < 0 && missile_max_y < 0) ||
-				(missile_min_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight || missile_max_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight)) {
+			if ((e.min_x < 0 && e.max_x < 0) || 
+				(e.min_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth || e.max_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth) ||
+				(e.min_y < 0 && e.max_y < 0) ||
+				(e.min_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight || e.max_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight)) {
+					OutputDebugString("Missile destroy!\n");
 					missile->live = 0;
 			}
 		}
@@ -569,14 +588,7 @@ int WinMainCRTStartup() {
 				RotatePoints(new_missile->points, 4, missile_center, ship_rotation_radians);
 
 				// put the missile at the tip of the ship
-				new_missile->points[0].x += ship_triangle.b.x;
-				new_missile->points[0].y += ship_triangle.b.y;
-				new_missile->points[1].x += ship_triangle.b.x;
-				new_missile->points[1].y += ship_triangle.b.y;
-				new_missile->points[2].x += ship_triangle.b.x;
-				new_missile->points[2].y += ship_triangle.b.y;
-				new_missile->points[3].x += ship_triangle.b.x;
-				new_missile->points[3].y += ship_triangle.b.y;
+				TranslatePoints(new_missile->points, 4, ship_triangle.b.x, ship_triangle.b.y);
 
 				new_missile->direction = ship_forward_direction;
 
@@ -590,12 +602,9 @@ int WinMainCRTStartup() {
 		DrawRectangle(0, 0, gBackbuffer.bitmapInfo.bmiHeader.biWidth, gBackbuffer.bitmapInfo.bmiHeader.biHeight, BACKGROUND_COLOR);
 
 		// Draw Ship
-		i32 min_x = my_floor(my_min(ship_triangle.a.x, my_min(ship_triangle.b.x, ship_triangle.c.x)));
-		i32 max_x = my_ceil(my_max(ship_triangle.a.x, my_max(ship_triangle.b.x, ship_triangle.c.x)));
-		i32 min_y = my_floor(my_min(ship_triangle.a.y, my_min(ship_triangle.b.y, ship_triangle.c.y)));
-		i32 max_y = my_ceil(my_max(ship_triangle.a.y, my_max(ship_triangle.b.y, ship_triangle.c.y)));
-		for (i32 y = min_y; y < max_y; y++) {
-			for (i32 x = min_x; x <= max_x; x++) {
+		Extents e = CalculateExtents((Point*)&ship_triangle, 3);
+		for (i32 y = e.min_y; y < e.max_y; y++) {
+			for (i32 x = e.min_x; x <= e.max_x; x++) {
 				if (x < 0 || x >= gBackbuffer.bitmapInfo.bmiHeader.biWidth) {
 					continue;
 				}
@@ -611,12 +620,10 @@ int WinMainCRTStartup() {
 		
 		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
 			Missile missile = pool_of_missiles[i];
+			if (!missile.live) continue;
 
 			// constrain how the number of points to check that in a the missile rectangle
-			i32 missile_min_x = my_floor(my_min(missile.points[0].x, my_min(missile.points[1].x, my_min(missile.points[2].x, missile.points[3].x))));
-			i32 missile_max_x = my_ceil(my_max(missile.points[0].x, my_max(missile.points[1].x, my_max(missile.points[2].x, missile.points[3].x))));
-			i32 missile_min_y = my_floor(my_min(missile.points[0].y, my_min(missile.points[1].y, my_min(missile.points[2].y, missile.points[3].y))));
-			i32 missile_max_y = my_ceil(my_max(missile.points[0].y, my_max(missile.points[1].y, my_max(missile.points[2].y, missile.points[3].y))));
+			Extents e = CalculateExtents(missile.points, 4);
 
 			// NOTE: Rasterize the rectangle by checking if a point is inside the rectangle. Do so
 			//       by constructing vectors representing the sides of the rectangle, and a vector
@@ -634,8 +641,8 @@ int WinMainCRTStartup() {
 			ad.y = missile.points[3].y - missile.points[0].y;
 			f32 dot_ad_ad = (ad.x * ad.x) + (ad.y * ad.y);
 
-			for (i32 y = missile_min_y; y < missile_max_y; y++) {
-				for (i32 x = missile_min_x; x < missile_max_x; x++) {
+			for (i32 y = e.min_y; y < e.max_y; y++) {
+				for (i32 x = e.min_x; x < e.max_x; x++) {
 					Vec2 am = { .x = (x - missile.points[0].x), .y = (y - missile.points[0].y) };
 
 					f32 dot_am_ab = (am.x * ab.x) + (am.y * ab.y);
@@ -706,3 +713,4 @@ int WinMainCRTStartup() {
 
     return 0;
 }
+
