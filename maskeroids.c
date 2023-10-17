@@ -5,6 +5,7 @@ int _fltused;
 #include <intrin.h>
 #include <emmintrin.h>
 #include <math.h>
+#include <stdio.h>
 
 
 // COMPLETE:
@@ -39,6 +40,7 @@ int _fltused;
 #define SHIP_COLOR 0xFFFF553B
 
 typedef int i32;
+typedef long long i64;
 typedef unsigned int u32;
 typedef float f32;
 typedef double f64;
@@ -154,6 +156,14 @@ f32 my_min(f32 a, f32 b) {
 	__m128 min = _mm_min_ps(operand_1, operand_2);
 	f32 result = *min.m128_f32;
 	return result;
+}
+
+i32 max_i32(i32 x, i32 y) {
+	return ((x > y) * x) + ((y > x) * y) + ((y == x) * x);
+}
+
+i32 min_i32(i32 x, i32 y) {
+	return ((x < y) * x) + ((y < x) * y) + ((y == x) * x);
 }
 
 i32 my_ceil(f32 value) {
@@ -445,6 +455,10 @@ int WinMainCRTStartup() {
 		);
 		return 1;
 	}
+
+	LARGE_INTEGER performance_freq = {0};
+	QueryPerformanceFrequency(&performance_freq);
+	i64 ticks_per_second = performance_freq.QuadPart;
 	
 	ShowWindow(window, SW_SHOW);
 
@@ -457,8 +471,17 @@ int WinMainCRTStartup() {
 	f32 missile_width = 4.0f;
 	f32 missile_height = 8.0f;
 
+	i64 timer_begin_tick = -1;
+	i64 timer_end_tick = -1;
+
+#define TARGET_FRAME_TIME_MICROS (1000000/60)
+
 	MSG msg = {0};
 	while (!gShouldCloseWindow) {
+		LARGE_INTEGER now = {0};
+		QueryPerformanceCounter(&now);
+		timer_begin_tick = now.QuadPart;
+
 		while (PeekMessageA(&msg, window, 0, 0, PM_REMOVE)) {
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
@@ -603,14 +626,12 @@ int WinMainCRTStartup() {
 
 		// Draw Ship
 		Extents e = CalculateExtents((Point*)&ship_triangle, 3);
-		for (i32 y = e.min_y; y < e.max_y; y++) {
+		e.min_x = max_i32(0, e.min_x);
+		e.max_x = min_i32(gBackbuffer.bitmapInfo.bmiHeader.biWidth - 1, e.max_x);
+		e.min_y = max_i32(0, e.min_y);
+		e.max_y = min_i32(gBackbuffer.bitmapInfo.bmiHeader.biHeight - 1, e.max_y);
+		for (i32 y = e.min_y; y <= e.max_y; y++) {
 			for (i32 x = e.min_x; x <= e.max_x; x++) {
-				if (x < 0 || x >= gBackbuffer.bitmapInfo.bmiHeader.biWidth) {
-					continue;
-				}
-				if (y < 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
-					continue;
-				}
 				if (isPointInTriangle((f32)x, (f32)y, &ship_triangle)) {
 					u32 *pixel = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
 					*pixel = SHIP_COLOR;
@@ -708,9 +729,26 @@ int WinMainCRTStartup() {
 #endif
 
 		Win32_CopyBackbufferToScreen(device_context);
-		Sleep(10);
+
+		QueryPerformanceCounter(&now);
+		timer_end_tick = now.QuadPart;
+
+		i64 elapsed_ticks = (timer_end_tick - timer_begin_tick);
+		i64 frame_elapsed_time_micros = (elapsed_ticks * 1000000) / ticks_per_second;
+		i64 time_to_sleep_ms = (TARGET_FRAME_TIME_MICROS - frame_elapsed_time_micros) / 1000;
+		if (time_to_sleep > 0) {
+			Sleep((i32)time_to_sleep_ms);
+		}
+		//i64 fps = 1000000 / frame_elapsed_time_us;
+
+/*
+		char fps_message[256] = {0};
+		snprintf(fps_message, sizeof(fps_message), 
+				"%lld us / %lld fps\n", frame_elapsed_time_us, fps);
+		OutputDebugString(fps_message);
+*/
+
 	}
 
     return 0;
 }
-
