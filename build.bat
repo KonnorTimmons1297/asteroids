@@ -21,7 +21,9 @@ REM /incremental:no - don't do incremental linking with .pdb file because it get
 REM /opt:icf - perform identical code folding, in case multiple functions generates identical code bytes
 REM /opt:ref - remove unreferenced functions/globals
 REM /subsystem:windows - create "gui" executable without console attached
-cl ..\maskeroids.c /nologo /W3 /WX /GS- /MTd /Od /Zi /Fe"maskeroids" /link /fixed /incremental:no /opt:icf /opt:ref /subsystem:windows libvcruntime.lib kernel32.lib Gdi32.lib User32.lib 
+
+set LIBS=libvcruntime.lib kernel32.lib gdi32.lib user32.lib ucrt.lib d3d11.lib dxguid.lib
+cl ..\maskeroids.c /nologo /W3 /WX /GS- /MTd /Od /Zi /Fe"maskeroids" /link /fixed /incremental:no /opt:icf /opt:ref /subsystem:windows %LIBS%
 move maskeroids.exe ..
 popd
 

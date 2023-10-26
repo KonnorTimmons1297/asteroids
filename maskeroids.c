@@ -1,11 +1,12 @@
+#define COBJMACROS
+#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-int _fltused;
+#include <d3d11.h>
 
-#include <intrin.h>
-#include <emmintrin.h>
-#include <math.h>
-#include <stdio.h>
+#include <intrin.h> // ceil, float, min, max
+#include <stdlib.h> // srand, rand
+#include <stdio.h> // snprintf
 
 
 // COMPLETE:
@@ -17,11 +18,11 @@ int _fltused;
 // - Allow ship to go off one side of the screen and appear on the other side
 // - Fire a small rectangle from the front of the ship when the user
 //   hits the spacebar
-
-// TODO:
 // - Draw meteor on the screen as a circle
 // - Give the meteor a random radius
 // - Give the meteor a velocity in a random direction
+
+// TODO:
 // - Add Collision detection between ship and the meteor
 // - Add Collision detection between bullet and the meteor
 // - Keep track of score
@@ -30,10 +31,19 @@ int _fltused;
 // - On collision with ship, game over
 // - Add Pause menu with quit and restart buttons
 // - Add audio
+// - Generate outline for asteroid
+//     * Select 8 points on the unit circle and give them
+//       different lengths, making a jagged appearance.
 // - Draw bitmaps for the ship, bullet, and meteor
 
-#define DEFAULT_WINDOW_WIDTH 800
-#define DEFAULT_WINDOW_HEIGHT 600
+#if DEBUG
+#define Assert(Expression) if(!(Expression)) { __debugbreak(); }
+#else
+#define Assert(Expression) if(!(Expression)) { *(int*)0 = 0; }
+#endif
+
+#define DEFAULT_WINDOW_WIDTH 1280
+#define DEFAULT_WINDOW_HEIGHT 960
 
 #define BACKGROUND_COLOR 0xFF111111
 // #define SHIP_COLOR 0xFFFFFFFF
@@ -45,57 +55,9 @@ typedef unsigned int u32;
 typedef float f32;
 typedef double f64;
 
+typedef char b8;
+
 static i32 gShouldCloseWindow = 0;
-
-typedef struct {
-	BITMAPINFO bitmapInfo;
-	u32 *pixels;
-} Win32_Backbuffer;
-
-static Win32_Backbuffer gBackbuffer = {0};
-
-void Win32_CopyBackbufferToScreen(HDC dc) {
-	i32 width = gBackbuffer.bitmapInfo.bmiHeader.biWidth;
-	i32 height = gBackbuffer.bitmapInfo.bmiHeader.biHeight;
-	StretchDIBits(dc, 
-		0, 0, width, height,
-		0, 0, width, height,
-		gBackbuffer.pixels,
-		&gBackbuffer.bitmapInfo,
-		DIB_RGB_COLORS,
-		SRCCOPY);	
-}
-
-void Win32_AllocateBackbuffer(i32 width, i32 height) {
-	if (gBackbuffer.pixels) {
-		VirtualFree(gBackbuffer.pixels, 0, MEM_RELEASE);
-		gBackbuffer.pixels = 0;
-	}
-
-	gBackbuffer.bitmapInfo.bmiHeader.biSize = sizeof(gBackbuffer.bitmapInfo.bmiHeader);
-	gBackbuffer.bitmapInfo.bmiHeader.biWidth = width;
-	gBackbuffer.bitmapInfo.bmiHeader.biHeight = height;
-	gBackbuffer.bitmapInfo.bmiHeader.biPlanes = 1;
-	gBackbuffer.bitmapInfo.bmiHeader.biBitCount = 32;
-	gBackbuffer.bitmapInfo.bmiHeader.biCompression = BI_RGB;
-
-	i32 bytes_per_pixel = 4;
-	i32 bitmap_mem_size = bytes_per_pixel * (width * height);
-	gBackbuffer.pixels = (unsigned int *)VirtualAlloc(0, bitmap_mem_size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
-}
-
-void DrawRectangle(i32 offset_x, i32 offset_y, i32 rectangle_width, i32 rectangle_height, u32 color) {
-	for (i32 y = offset_y; y < offset_y + rectangle_height ; y++) {
-		// Chose this approach because setting each pixel
-		// sequentially was taking 1ms+ depending on the
-		// size of the screen.
-		__stosd(
-			(unsigned long*)(gBackbuffer.pixels + offset_x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth)),
-			color,
-			rectangle_width
-		);
-	}
-}
 
 typedef struct {
 	f32 x, y;
@@ -182,9 +144,20 @@ i32 my_floor(f32 value) {
 	return result;
 }
 
+i32 Round(f32 value) {
+	i32 truncate = (i32)value;
+	i32 fractional_part = (i32)(value - truncate);
+	i32 result = ((fractional_part >= 0.5f) * (truncate + 1)) + ((fractional_part < 0.5f) * truncate);
+	return result;
+}
+
 typedef struct {
 	f32 x, y;
 } Vec2;
+
+typedef struct {
+	i32 x, y;
+} Vec2i;
 
 typedef struct {
 	Triangle ship_body;
@@ -192,8 +165,11 @@ typedef struct {
 	i32 posX, posY;	
 } Ship;
 
-#define SHIP_ROTATION_STEP 0.1f
-#define SHIP_SPEED 3.0f
+#define PI 3.14f
+#define DEG2RAD(X) (X * (PI/180.0f))
+#define SHIP_ROTATION_STEP (2*PI)
+#define SHIP_SPEED 250.0f
+#define MISSILE_SPEED 500.0f
 
 static int gRotateShipLeft = 0;
 static int gRotateShipRight = 0;
@@ -244,9 +220,6 @@ i32 RoundNearest(f32 value) {
 	return result;
 }
 
-#define PI 3.14f
-#define DEG2RAD(X) (X * (PI/180.0f))
-
 i32 Min(i32 x, i32 y, i32 z) {
 	i32 result = x;
 	
@@ -291,12 +264,6 @@ LRESULT CALLBACK WindowCallback(
 		case WM_CLOSE: {
 			gShouldCloseWindow = 1;
 		} break;
-		
-		case WM_SIZE: {
-			i32 window_width = LOWORD(lParam);
-			i32 window_height = HIWORD(lParam);
-			Win32_AllocateBackbuffer(window_width, window_height);
-		} break;
 
 		case WM_KEYDOWN:
 		case WM_KEYUP: {
@@ -322,6 +289,10 @@ LRESULT CALLBACK WindowCallback(
 					return DefWindowProc(window_handle, msg, wParam, lParam);
 				} break;
 			}
+		} break;
+		
+		case WM_DESTROY: {
+			PostQuitMessage(0);
 		} break;
 
 		default: {
@@ -403,16 +374,378 @@ typedef struct {
 	i32 live;
 } Missile;
 
+f32 DotProduct(Vec2 v1, Vec2 v2) {
+	return (v1.x * v2.x) + (v1.y * v2.y);
+}
+
+f32 VectorLength(Vec2 v) {
+	return DotProduct(v, v);
+}
+
+typedef struct {
+	Vec2i pos;
+	Vec2 direction;
+	i32 speed;
+	i32 radius;
+	b8 active;
+} Meteor;
+
+typedef struct {
+	u32 *pixels;
+	i32 width;
+	i32 height;
+} DrawSurface;
+
+void DrawCircle(DrawSurface *surface, i32 radius, i32 pos_x, i32 pos_y) {	
+	for (i32 y = (pos_y - radius); y < (pos_y + radius); y++) {
+		if (y < 0 || y > surface->height) {
+			continue;
+		}
+		for (i32 x = (pos_x - radius); x < (pos_x + radius); x++) {
+			if (x < 0 || x > surface->width) {
+				continue;
+			}
+			f32 x_diff = (f32)(x - pos_x);
+			f32 y_diff = (f32)(y - pos_y);
+			i32 distance_from_center = my_ceil(my_sqrt((x_diff * x_diff) + (y_diff * y_diff)));
+			if (distance_from_center <= radius) {
+				*(surface->pixels + x + (y * surface->width)) = 0xFFFFFFFF;
+			}
+		}
+	}
+}
+
+void DrawRectangle(DrawSurface *surface, i32 offset_x, i32 offset_y, i32 rectangle_width, i32 rectangle_height, u32 color) {
+	for (i32 y = offset_y; y < offset_y + rectangle_height ; y++) {
+		// Chose this approach because setting each pixel
+		// sequentially was taking 1ms+ depending on the
+		// size of the screen.
+		__stosd(
+			(unsigned long*)(surface->pixels + offset_x + (y * surface->width)),
+			color,
+			rectangle_width
+		);
+	}
+}
+
+#define MISSILE_POOL_SIZE 16
+#define MISSILE_WIDTH 4.0f
+#define MISSILE_HEIGHT 8.0f
+#define METEOR_POOL_SIZE 32
+typedef struct {
+	b8 initialized;
+	Vec2 ship_pos;
+	f32 ship_rotation_radians;
+	Missile pool_of_missiles[MISSILE_POOL_SIZE];
+	Meteor meteor_pool[METEOR_POOL_SIZE];
+} AsteroidsState;
+
+void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface) {
+	if (!state->initialized) {
+		i32 num_meteors = rand() % METEOR_POOL_SIZE;
+		for (i32 i = 0; i < num_meteors; i++) {
+			Meteor *m = state->meteor_pool + i;
+			m->pos.x = (rand() % surface->width);
+			m->pos.y = (rand() % surface->height);
+			m->radius = (rand() % 50);
+			m->speed = 500 + (rand() % 250);
+			
+			f32 rand1 = (f32)(rand() % 1000);
+			if ((rand() % 10) >= 5) {
+				rand1 *= -1.0f;
+			}
+			f32 rand2 = (f32)(rand() % 500);
+			if ((rand() % 10) >= 5) {
+				rand2 *= -1.0f;
+			}
+			
+			f32 length = my_sqrt((rand1 * rand1) + (rand2 * rand2));
+			rand1 /= length;
+			rand2 /= length;
+			
+			m->direction.x = rand1;
+			m->direction.y = rand2;
+			m->active = 1;
+		}
+		
+		state->initialized = 1;
+	}
+	Triangle ship_triangle = {
+		.a = { 0, 0 },
+		.b = { 20, 60 },
+		.c = { 40, 0 }
+	};
+	
+	//////////////////////////////////////////////
+	/// Apply Rotation
+	///
+	if (gRotateShipLeft && !gRotateShipRight) {
+		state->ship_rotation_radians -= delta_time * SHIP_ROTATION_STEP;
+	} else if (gRotateShipRight) {
+		state->ship_rotation_radians += delta_time * SHIP_ROTATION_STEP;
+	}
+
+	// Use triangle centroid as the center of rotation
+	Point rotation_origin = Centroid(ship_triangle);
+	RotatePoints((Point*)&ship_triangle, 3, rotation_origin, state->ship_rotation_radians);
+	
+	Point ship_center = Centroid(ship_triangle);
+	Vec2 ship_forward_direction = {0};
+	ship_forward_direction.x = ship_triangle.b.x - ship_center.x;
+	ship_forward_direction.y = ship_triangle.b.y - ship_center.y;
+	f32 forward_vector_length = my_sqrt((ship_forward_direction.x*ship_forward_direction.x) + 
+										(ship_forward_direction.y*ship_forward_direction.y));
+	ship_forward_direction.x /= forward_vector_length;
+	ship_forward_direction.y /= forward_vector_length;
+	//////////////////////////////////////////////
+	//////////////////////////////////////////////
+	
+
+	///////////////////////////////////////////////
+	/// Apply Translation
+	///
+	if (gMoveShipForward) {
+		state->ship_pos.x += (ship_forward_direction.x * (delta_time * SHIP_SPEED));
+		state->ship_pos.y += (ship_forward_direction.y * (delta_time * SHIP_SPEED));
+	}
+
+	{
+		Extents e = CalculateExtents((Point*)&ship_triangle, 3);
+		i32 ship_draw_area_width = e.max_x - e.min_x;
+		i32 ship_draw_area_height = e.max_y - e.min_y;	
+
+		// don't check <= because ship_pos_x will be equal if
+		// it goes off the right side of the screen
+		if (state->ship_pos.x < -ship_draw_area_width) {
+			// went off left side of screen
+			state->ship_pos.x = (f32)(surface->width - 1);
+		} else if (state->ship_pos.x > (surface->width - 1)) {
+			// went off right side of screen
+			state->ship_pos.x = (f32)-ship_draw_area_width;
+		}
+
+		// don't check <= because ship_pos_y will be equal if
+		// it goes off the top side of the screen
+		if (state->ship_pos.y < -ship_draw_area_height) {
+			// ship went off bottom of screen
+			state->ship_pos.y = (f32)(surface->height - 1);
+		} else if (state->ship_pos.y > (surface->height - 1)) {
+			// ship went off top of screen
+			state->ship_pos.y = (f32)-ship_draw_area_height;
+		}
+	}
+
+	TranslatePoints((Point*)&ship_triangle, 3, state->ship_pos.x, state->ship_pos.y);
+
+	ship_center = Centroid(ship_triangle);
+	ship_forward_direction.x = ship_triangle.b.x - ship_center.x;
+	ship_forward_direction.y = ship_triangle.b.y - ship_center.y;
+	forward_vector_length = my_sqrt((ship_forward_direction.x*ship_forward_direction.x) + (ship_forward_direction.y*ship_forward_direction.y));
+	ship_forward_direction.x /= forward_vector_length;
+	ship_forward_direction.y /= forward_vector_length;
+	///////////////////////////////////////////////
+	///////////////////////////////////////////////
+
+	for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
+		Missile *missile = state->pool_of_missiles + i;
+
+		if (!missile->live) continue;
+		
+		f32 speed = delta_time * MISSILE_SPEED;
+		f32 missile_delta_x = speed * missile->direction.x;
+		f32 missile_delta_y = speed * missile->direction.y;
+
+		TranslatePoints(missile->points, 4, missile_delta_x, missile_delta_y);
+
+		Extents e = CalculateExtents(missile->points, 4);
+		if ((e.min_x < 0 && e.max_x < 0) || 
+			(e.min_x > surface->width || e.max_x > surface->width) ||
+			(e.min_y < 0 && e.max_y < 0) ||
+			(e.min_y > surface->height || e.max_y > surface->height)) {
+				OutputDebugString("Missile destroyed!\n");
+				missile->live = 0;
+		}
+	}
+
+	if (gShootMissile) {
+		Missile *new_missile = 0;
+		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
+			Missile *m = state->pool_of_missiles + i;
+			if (!m->live) {
+				new_missile = m;
+				break;
+			}
+		}
+
+		if (new_missile) {
+			// set the missile points(the missile may be reused)
+			new_missile->points[0].x = 0;
+			new_missile->points[0].y = 0;
+			new_missile->points[1].x = 0;
+			new_missile->points[1].y = MISSILE_HEIGHT;
+			new_missile->points[2].x = MISSILE_WIDTH;
+			new_missile->points[2].y = MISSILE_HEIGHT;
+			new_missile->points[3].x = MISSILE_WIDTH;
+			new_missile->points[3].y = 0;
+
+			// rotate the missile so it's in the same direction as the ship
+			Point missile_center = {0};
+			missile_center.x = MISSILE_WIDTH / 2.0f;
+			missile_center.y = MISSILE_HEIGHT / 2.0f;
+			RotatePoints(new_missile->points, 4, missile_center, state->ship_rotation_radians);
+
+			// put the missile at the tip of the ship
+			TranslatePoints(new_missile->points, 4, ship_triangle.b.x, ship_triangle.b.y);
+
+			new_missile->direction = ship_forward_direction;
+
+			new_missile->live = 1;
+		}
+
+		gShootMissile = 0;
+	}
+
+	// Clear background
+	DrawRectangle(surface, 0, 0, surface->width, surface->height, BACKGROUND_COLOR);
+
+	// Draw Ship
+	Extents e = CalculateExtents((Point*)&ship_triangle, 3);
+	e.min_x = max_i32(0, e.min_x);
+	e.max_x = min_i32(surface->width - 1, e.max_x);
+	e.min_y = max_i32(0, e.min_y);
+	e.max_y = min_i32(surface->height - 1, e.max_y);
+	for (i32 y = e.min_y; y <= e.max_y; y++) {
+		for (i32 x = e.min_x; x <= e.max_x; x++) {
+			if (isPointInTriangle((f32)x, (f32)y, &ship_triangle)) {
+				u32 *pixel = surface->pixels + x + (y * surface->width);
+				*pixel = SHIP_COLOR;
+			}
+		}
+	}
+	
+	for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
+		Missile missile = state->pool_of_missiles[i];
+		if (!missile.live) continue;
+
+		// constrain how the number of points to check that in a the missile rectangle
+		Extents e = CalculateExtents(missile.points, 4);
+
+		// NOTE: Rasterize the rectangle by checking if a point is inside the rectangle. Do so
+		//       by constructing vectors representing the sides of the rectangle, and a vector
+		//       representing the test point. Project the vector representing the test point on
+		//       to both vectors representing the sides of the rectangle, and if the projection
+		//       length is within the respective range, then the point is inside the rectangle.
+
+		Vec2 ab = {0};
+		ab.x = missile.points[1].x - missile.points[0].x;
+		ab.y = missile.points[1].y - missile.points[0].y;
+		f32 dot_ab_ab = VectorLength(ab);
+
+		Vec2 ad = {0};
+		ad.x = missile.points[3].x - missile.points[0].x;
+		ad.y = missile.points[3].y - missile.points[0].y;
+		f32 dot_ad_ad = VectorLength(ad);
+
+		for (i32 y = e.min_y; y < e.max_y; y++) {
+			for (i32 x = e.min_x; x < e.max_x; x++) {
+				Vec2 am = { .x = (x - missile.points[0].x), .y = (y - missile.points[0].y) };
+
+				f32 dot_am_ab = DotProduct(am, ab);
+				if (dot_am_ab < 0 || dot_am_ab > dot_ab_ab) {
+					continue;
+				}
+
+				f32 dot_am_ad = DotProduct(am, ad);
+				if (dot_am_ad < 0 || dot_am_ad > dot_ad_ad) {
+					continue;
+				}
+				
+				if (x < 0 || x >= surface->width) {
+					continue;
+				}
+				if (y < 0 || y >= surface->height) {
+					continue;
+				}
+				u32 *pixel = surface->pixels + x + (y * surface->width);
+				*pixel = 0xFFFFFFFF;
+			}
+		}
+	}
+
+	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+		Meteor *meteor = state->meteor_pool + i;
+		if (!meteor->active) continue;
+		meteor->pos.x += Round(meteor->direction.x * (delta_time * meteor->speed));
+		meteor->pos.y += Round(meteor->direction.y * (delta_time * meteor->speed));
+		
+		if ((meteor->pos.x + meteor->radius) <= 0) {
+			meteor->pos.x = surface->width + meteor->radius;
+		} else if ((meteor->pos.x - meteor->radius) >= surface->width) {
+			meteor->pos.x = -1 * meteor->radius;
+		}
+		
+		if ((meteor->pos.y + meteor->radius) <= 0) {
+			meteor->pos.y = surface->height + meteor->radius;
+		} else if ((meteor->pos.y - meteor->radius) >= surface->height) {
+			meteor->pos.y = -1 * meteor->radius;
+		}
+		
+		DrawCircle(surface, meteor->radius, meteor->pos.x, meteor->pos.y);
+	}
+	
+	
+
+#if DEBUG_SHIP_FORWARD_VECTOR
+	////////////////////////////////////////
+	/// Debug Ship Forward Vector
+	///
+
+	// y = mx + b
+	// b = y - mx
+
+//	if (ship_center.x == ship_triangle.b.x) {
+//		// vertical line!
+//		i32 miny = my_floor(my_min(ship_center.y, ship_triangle.b.y));
+//		i32 maxy = my_ceil(my_max(ship_center.y, ship_triangle.b.y));
+//		i32 x = RoundNearest(ship_center.x);
+//		for (i32 y = miny; y < maxy; y++) {
+//			if (y <= 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
+//				continue;
+//			}
+//			u32 *p = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
+//			*p = 0xFFFFFFFF;
+//		}
+//	} else {
+//		f32 m = (ship_center.y - ship_triangle.b.y)/(ship_center.x - ship_triangle.b.x);
+//		f32 b = ship_triangle.b.y - m*ship_triangle.b.x;
+//		i32 forward_min_x = my_floor(my_min(ship_triangle.b.x, ship_center.x));
+//		i32 forward_max_x = my_ceil(my_max(ship_triangle.b.x, ship_center.x));
+
+//		for (i32 x = forward_min_x; x <= forward_max_x; x++) {
+//			i32 y = RoundNearest((m * x) + b);
+//			if (y <= 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
+//				continue;
+//			}
+//			u32 *p = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
+//			*p = 0xFFFFFFFF;
+//		}
+//	}
+	////////////////////////////////////////
+	////////////////////////////////////////
+#endif
+}
+
 int WinMainCRTStartup() {
 	HINSTANCE hInstance = GetModuleHandle(0);
 
-	char *window_class_name = "Maskeroids_Window_class";
-	WNDCLASSA window_class = {0};
+	wchar_t *window_class_name = L"Maskeroids_Window_class";
+	WNDCLASSEXW window_class = {0};
+	window_class.cbSize = sizeof(window_class);
 	window_class.hInstance = hInstance;
 	window_class.lpszClassName = window_class_name;
 	window_class.lpfnWndProc = WindowCallback;
-	ATOM registered_class = RegisterClassA(&window_class);
-
+	
+	ATOM registered_class = RegisterClassExW(&window_class);
 	if (!registered_class) {
 		MessageBox(
 			NULL,
@@ -423,9 +756,10 @@ int WinMainCRTStartup() {
 		return 1;
 	}
 
-	HWND window = CreateWindowA(
-		window_class_name, // lpClassName
-		"Maskeroids!", // lpWindowName
+	HWND window = CreateWindowExW(
+		WS_EX_APPWINDOW,
+		window_class.lpszClassName, // lpClassName
+		L"Maskeroids!", // lpWindowName
 		WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, // dwStyle
 		CW_USEDEFAULT, // X
 		CW_USEDEFAULT, // Y
@@ -442,313 +776,209 @@ int WinMainCRTStartup() {
 		return 1;
 	}
 
-	HDC device_context = GetDC(window);
+	RECT client_rect = {0};
+	GetClientRect(window, &client_rect);
+	i32 window_width = DEFAULT_WINDOW_WIDTH;
+	i32 window_height = DEFAULT_WINDOW_HEIGHT;
 
-	Win32_AllocateBackbuffer(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+	DXGI_SWAP_CHAIN_DESC swap_chain_description = {
+		.BufferDesc = {
+			.Width = window_width,
+			.Height = window_height,
+			.RefreshRate = { 60, 1 },
+			.Format = DXGI_FORMAT_B8G8R8A8_UNORM
+		},
+		.SampleDesc = { 1, 0 },
+		.BufferUsage = DXGI_USAGE_BACK_BUFFER,
+		.BufferCount = 1,
+		.OutputWindow = window,
+		.Windowed = TRUE,
+		.SwapEffect = DXGI_SWAP_EFFECT_DISCARD
+	};
 
-	if (!gBackbuffer.pixels) {
-		MessageBox(
+	i32 swap_chain_flags = 0;
+	swap_chain_flags |= D3D11_CREATE_DEVICE_DEBUG; 
+
+	HRESULT hResult = 0;
+
+	IDXGISwapChain *swap_chain;
+	ID3D11Device *d3d11_device;
+	ID3D11DeviceContext *d3d11_device_context;
+	hResult = D3D11CreateDeviceAndSwapChain(
+		NULL,                      //IDXGIAdapter *pAdapter
+		D3D_DRIVER_TYPE_HARDWARE,  
+		NULL,                      //HMODULE Software
+		swap_chain_flags,
+		NULL,                      //D3D_FEATURE_LEVEL *pFeatureLevels
+		0,                         //UINT FeatureLevels
+		D3D11_SDK_VERSION,
+		&swap_chain_description,
+		&swap_chain,
+		&d3d11_device,
+		NULL,                      //D3D_FEATURE_LEVEL *pFeatureLevel,
+		&d3d11_device_context);
+
+	if (FAILED(hResult)) {
+		// try to create a software rasterization driver
+		OutputDebugString("Falling back to software driver\n");
+		hResult = D3D11CreateDeviceAndSwapChain(
 			NULL,
-			"Initializing backbuffer failed!",
-			"Error",
-			MB_OK
-		);
-		return 1;
+			D3D_DRIVER_TYPE_WARP,
+			NULL,
+			swap_chain_flags,
+			NULL,
+			0,
+			D3D11_SDK_VERSION,
+			&swap_chain_description,
+			&swap_chain,
+			&d3d11_device,
+			NULL,                      //D3D_FEATURE_LEVEL *pFeatureLevel,
+			&d3d11_device_context);
+		if (FAILED(hResult)) {
+			MessageBox(
+				NULL,
+				"Failed to initialize D3D11!",
+				"D3D11 Error",
+				MB_OK);
+			return 1;
+		}
 	}
+	
+	ID3D11Texture2D *backbuffer = NULL;
+	ID3D11Texture2D *cpubuffer = NULL;
 
+	ShowWindow(window, SW_SHOW);
+
+	LARGE_INTEGER now = {0};
 	LARGE_INTEGER performance_freq = {0};
 	QueryPerformanceFrequency(&performance_freq);
 	i64 ticks_per_second = performance_freq.QuadPart;
 	
-	ShowWindow(window, SW_SHOW);
-
-	f32 ship_rotation_radians = 0;
-	f32 ship_pos_x = (gBackbuffer.bitmapInfo.bmiHeader.biWidth / 2.0f);
-	f32 ship_pos_y = (gBackbuffer.bitmapInfo.bmiHeader.biHeight / 2.0f);
-
-#define MISSILE_POOL_SIZE 8
-	Missile pool_of_missiles[MISSILE_POOL_SIZE] = {0};
-	f32 missile_width = 4.0f;
-	f32 missile_height = 8.0f;
-
-	i64 timer_begin_tick = -1;
-	i64 timer_end_tick = -1;
+	AsteroidsState asteroids = {0};
+	asteroids.ship_pos.x = (window_width / 2.0f);
+	asteroids.ship_pos.y = (window_height / 2.0f);
 
 #define TARGET_FRAME_TIME_MICROS (1000000/60)
 
-	MSG msg = {0};
-	while (!gShouldCloseWindow) {
-		LARGE_INTEGER now = {0};
-		QueryPerformanceCounter(&now);
-		timer_begin_tick = now.QuadPart;
+	b8 d3d11_initialized = 0;
+	
+	QueryPerformanceCounter(&now);
+	i64 last_tick_count = now.QuadPart;
+	
+	srand((u32)now.QuadPart);
 
+	MSG msg = {0};
+	while (!gShouldCloseWindow) {		
+		QueryPerformanceCounter(&now);
+		i64 frame_timer_begin_tick = now.QuadPart;
+		
 		while (PeekMessageA(&msg, window, 0, 0, PM_REMOVE)) {
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
 
-		Triangle ship_triangle = {
-			.a = { 0, 0 },
-			.b = { 20, 60 },
-			.c = { 40, 0 }
-		};
-		
-		//////////////////////////////////////////////
-		/// Apply Rotation
-		///
-		if (gRotateShipLeft && !gRotateShipRight) {
-			ship_rotation_radians += SHIP_ROTATION_STEP;
-		} else if (gRotateShipRight) {
-			ship_rotation_radians -= SHIP_ROTATION_STEP;
+		GetClientRect(window, &client_rect);
+		i32 new_width = client_rect.right;
+		i32 new_height = client_rect.bottom;
+
+		b8 window_resized = window_width != new_width || window_height != new_height;
+		if (window_resized && !d3d11_initialized) {
+			if (backbuffer) {
+				ID3D11Texture2D_Release(backbuffer);
+			}
+			if (cpubuffer) {
+				ID3D11Texture2D_Release(cpubuffer);
+			}
+			backbuffer = NULL;
+			cpubuffer = NULL;
+
+			window_width = new_width;
+			window_height = new_height;
+
+			b8 window_is_not_minimized = !(window_width == 0 || window_height == 0);
+				if (window_is_not_minimized) {
+				hResult = IDXGISwapChain_ResizeBuffers(
+					swap_chain, 1, window_width, window_height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+				Assert(SUCCEEDED(hResult));
+
+				hResult = IDXGISwapChain_GetBuffer(swap_chain, 0, &IID_ID3D11Texture2D, (void**)&backbuffer);
+				Assert(SUCCEEDED(hResult));
+
+				D3D11_TEXTURE2D_DESC buffer_description = {
+					.Width = window_width,
+					.Height = window_height,
+					.MipLevels = 1,
+					.ArraySize = 1,
+					.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+					.SampleDesc = { 1, 0 },
+					.Usage = D3D11_USAGE_DYNAMIC,
+					.BindFlags = D3D11_BIND_SHADER_RESOURCE,
+					.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE
+				};
+
+				hResult = ID3D11Device_CreateTexture2D(d3d11_device, &buffer_description, NULL, &cpubuffer);
+				Assert(SUCCEEDED(hResult));
+			}
+
+			d3d11_initialized = 1;
 		}
 
-		// Use triangle centroid as the center of rotation
-		Point rotation_origin = Centroid(ship_triangle);
-		RotatePoints((Point*)&ship_triangle, 3, rotation_origin, ship_rotation_radians);
-		
-		Point ship_center = Centroid(ship_triangle);
-		Vec2 ship_forward_direction = {0};
-		ship_forward_direction.x = ship_triangle.b.x - ship_center.x;
-		ship_forward_direction.y = ship_triangle.b.y - ship_center.y;
-		f32 forward_vector_length = my_sqrt((ship_forward_direction.x*ship_forward_direction.x) + (ship_forward_direction.y*ship_forward_direction.y));
-		ship_forward_direction.x /= forward_vector_length;
-		ship_forward_direction.y /= forward_vector_length;
-		//////////////////////////////////////////////
-		//////////////////////////////////////////////
-		
+		b8 window_visible = window_width && window_height;
+		if (window_visible) {
+			D3D11_MAPPED_SUBRESOURCE mapped_resource = {0};
+			hResult = ID3D11DeviceContext_Map(d3d11_device_context, (ID3D11Resource*)cpubuffer, 0,
+				D3D11_MAP_WRITE_DISCARD, 0, &mapped_resource);
+			Assert(SUCCEEDED(hResult));
 
-		///////////////////////////////////////////////
-		/// Apply Translation
-		///
-		if (gMoveShipForward) {
-			ship_pos_x += (ship_forward_direction.x * SHIP_SPEED);
-			ship_pos_y += (ship_forward_direction.y * SHIP_SPEED);
+			u32 texture_width = mapped_resource.RowPitch / sizeof(u32);
+
+			QueryPerformanceCounter(&now);
+			i64 current_tick_count = now.QuadPart;
+
+			i64 elapsed_ticks_since_last_frame = current_tick_count - last_tick_count;
+			f32 time_since_last_frame = (f32)(elapsed_ticks_since_last_frame) / ticks_per_second;
+
+			char time_since_last_frame_msg[256] = {0};
+			snprintf(time_since_last_frame_msg, sizeof(time_since_last_frame_msg),
+				"Delta Time: %fs\n", time_since_last_frame);
+			OutputDebugString(time_since_last_frame_msg);
+
+			last_tick_count = current_tick_count;
+			DrawSurface ds = {0};
+			ds.pixels = (u32*)mapped_resource.pData;
+			ds.width = texture_width;
+			ds.height = window_height - 1;
+
+			UpdateAndRender(&asteroids, time_since_last_frame, &ds);
+
+			ID3D11DeviceContext_Unmap(d3d11_device_context, (ID3D11Resource*)cpubuffer, 0);
+			ID3D11DeviceContext_CopyResource(d3d11_device_context, (ID3D11Resource*)backbuffer, 
+				(ID3D11Resource*)cpubuffer);
 		}
-
-		{
-			Extents e = CalculateExtents((Point*)&ship_triangle, 3);
-			i32 ship_draw_area_width = e.max_x - e.min_x;
-			i32 ship_draw_area_height = e.max_y - e.min_y;	
-
-			// don't check <= because ship_pos_x will be equal if
-			// it goes off the right side of the screen
-			if (ship_pos_x < -ship_draw_area_width) {
-				// went off left side of screen
-				ship_pos_x = (f32)(gBackbuffer.bitmapInfo.bmiHeader.biWidth - 1);
-			} else if (ship_pos_x > (gBackbuffer.bitmapInfo.bmiHeader.biWidth - 1)) {
-				// went off right side of screen
-				ship_pos_x = (f32)-ship_draw_area_width;
-			}
-
-			// don't check <= because ship_pos_y will be equal if
-			// it goes off the top side of the screen
-			if (ship_pos_y < -ship_draw_area_height) {
-				// ship went off bottom of screen
-				ship_pos_y = (f32)(gBackbuffer.bitmapInfo.bmiHeader.biHeight - 1);
-			} else if (ship_pos_y > (gBackbuffer.bitmapInfo.bmiHeader.biHeight - 1)) {
-				// ship went off top of screen
-				ship_pos_y = (f32)-ship_draw_area_height;
-			}
-		}
-
-		TranslatePoints((Point*)&ship_triangle, 3, ship_pos_x, ship_pos_y);
-
-		ship_center = Centroid(ship_triangle);
-		ship_forward_direction.x = ship_triangle.b.x - ship_center.x;
-		ship_forward_direction.y = ship_triangle.b.y - ship_center.y;
-		forward_vector_length = my_sqrt((ship_forward_direction.x*ship_forward_direction.x) + (ship_forward_direction.y*ship_forward_direction.y));
-		ship_forward_direction.x /= forward_vector_length;
-		ship_forward_direction.y /= forward_vector_length;
-		///////////////////////////////////////////////
-		///////////////////////////////////////////////
-
-		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
-			Missile *missile = pool_of_missiles + i;
-
-			if (!missile->live) continue;
-
-			f32 missile_delta_x = 6.0f * missile->direction.x;
-			f32 missile_delta_y = 6.0f * missile->direction.y;
-
-			TranslatePoints(missile->points, 4, missile_delta_x, missile_delta_y);
-
-			Extents e = CalculateExtents(missile->points, 4);
-
-			if ((e.min_x < 0 && e.max_x < 0) || 
-				(e.min_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth || e.max_x > gBackbuffer.bitmapInfo.bmiHeader.biWidth) ||
-				(e.min_y < 0 && e.max_y < 0) ||
-				(e.min_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight || e.max_y > gBackbuffer.bitmapInfo.bmiHeader.biHeight)) {
-					OutputDebugString("Missile destroy!\n");
-					missile->live = 0;
-			}
-		}
-
-		if (gShootMissile) {
-			Missile *new_missile = 0;
-			for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
-				Missile *m = pool_of_missiles + i;
-				if (!m->live) {
-					new_missile = m;
-					break;
-				}
-			}
-
-			if (new_missile) {
-				// set the missile points(the missile may be reused)
-				new_missile->points[0].x = 0;
-				new_missile->points[0].y = 0;
-				new_missile->points[1].x = 0;
-				new_missile->points[1].y = missile_height;
-				new_missile->points[2].x = missile_width;
-				new_missile->points[2].y = missile_height;
-				new_missile->points[3].x = missile_width;
-				new_missile->points[3].y = 0;
-
-				// rotate the missile so it's in the same direction as the ship
-				Point missile_center = {0};
-				missile_center.x = missile_width / 2.0f;
-				missile_center.y = missile_height / 2.0f;
-				RotatePoints(new_missile->points, 4, missile_center, ship_rotation_radians);
-
-				// put the missile at the tip of the ship
-				TranslatePoints(new_missile->points, 4, ship_triangle.b.x, ship_triangle.b.y);
-
-				new_missile->direction = ship_forward_direction;
-
-				new_missile->live = 1;
-			}
-
-			gShootMissile = 0;
-		}
-
-		// Clear background
-		DrawRectangle(0, 0, gBackbuffer.bitmapInfo.bmiHeader.biWidth, gBackbuffer.bitmapInfo.bmiHeader.biHeight, BACKGROUND_COLOR);
-
-		// Draw Ship
-		Extents e = CalculateExtents((Point*)&ship_triangle, 3);
-		e.min_x = max_i32(0, e.min_x);
-		e.max_x = min_i32(gBackbuffer.bitmapInfo.bmiHeader.biWidth - 1, e.max_x);
-		e.min_y = max_i32(0, e.min_y);
-		e.max_y = min_i32(gBackbuffer.bitmapInfo.bmiHeader.biHeight - 1, e.max_y);
-		for (i32 y = e.min_y; y <= e.max_y; y++) {
-			for (i32 x = e.min_x; x <= e.max_x; x++) {
-				if (isPointInTriangle((f32)x, (f32)y, &ship_triangle)) {
-					u32 *pixel = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
-					*pixel = SHIP_COLOR;
-				}
-			}
-		}
-		
-		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
-			Missile missile = pool_of_missiles[i];
-			if (!missile.live) continue;
-
-			// constrain how the number of points to check that in a the missile rectangle
-			Extents e = CalculateExtents(missile.points, 4);
-
-			// NOTE: Rasterize the rectangle by checking if a point is inside the rectangle. Do so
-			//       by constructing vectors representing the sides of the rectangle, and a vector
-			//       representing the test point. Project the vector representing the test point on
-			//       to both vectors representing the sides of the rectangle, and if the projection
-			//       length is within the respective range, then the point is inside the triangle.
-
-			Vec2 ab = {0};
-			ab.x = missile.points[1].x - missile.points[0].x;
-			ab.y = missile.points[1].y - missile.points[0].y;
-			f32 dot_ab_ab = (ab.x * ab.x) + (ab.y * ab.y);
-
-			Vec2 ad = {0};
-			ad.x = missile.points[3].x - missile.points[0].x;
-			ad.y = missile.points[3].y - missile.points[0].y;
-			f32 dot_ad_ad = (ad.x * ad.x) + (ad.y * ad.y);
-
-			for (i32 y = e.min_y; y < e.max_y; y++) {
-				for (i32 x = e.min_x; x < e.max_x; x++) {
-					Vec2 am = { .x = (x - missile.points[0].x), .y = (y - missile.points[0].y) };
-
-					f32 dot_am_ab = (am.x * ab.x) + (am.y * ab.y);
-					if (dot_am_ab < 0 || dot_am_ab > dot_ab_ab) {
-						continue;
-					}
-
-					f32 dot_am_ad = (am.x * ad.x) + (am.y * ad.y);
-					if (dot_am_ad < 0 || dot_am_ad > dot_ad_ad) {
-						continue;
-					}
-					
-					if (x < 0 || x >= gBackbuffer.bitmapInfo.bmiHeader.biWidth) {
-						continue;
-					}
-					if (y < 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
-						continue;
-					}
-					u32 *pixel = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
-					*pixel = 0xFFFFFFFF;
-				}
-			}
-
-		}
-
-#if DEBUG_SHIP_FORWARD_VECTOR
-		////////////////////////////////////////
-		/// Debug Ship Forward Vector
-		///
-
-		// y = mx + b
-		// b = y - mx
-
-		if (ship_center.x == ship_triangle.b.x) {
-			// vertical line!
-			i32 miny = my_floor(my_min(ship_center.y, ship_triangle.b.y));
-			i32 maxy = my_ceil(my_max(ship_center.y, ship_triangle.b.y));
-			i32 x = RoundNearest(ship_center.x);
-			for (i32 y = miny; y < maxy; y++) {
-				if (y <= 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
-					continue;
-				}
-				u32 *p = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
-				*p = 0xFFFFFFFF;
-			}
+			
+		hResult = IDXGISwapChain_Present(swap_chain, 1, 0);
+		if (hResult == DXGI_STATUS_OCCLUDED) {
+			// window is not visible
+			Sleep(10);
 		} else {
-			f32 m = (ship_center.y - ship_triangle.b.y)/(ship_center.x - ship_triangle.b.x);
-			f32 b = ship_triangle.b.y - m*ship_triangle.b.x;
-			i32 forward_min_x = my_floor(my_min(ship_triangle.b.x, ship_center.x));
-			i32 forward_max_x = my_ceil(my_max(ship_triangle.b.x, ship_center.x));
-
-			for (i32 x = forward_min_x; x <= forward_max_x; x++) {
-				i32 y = RoundNearest((m * x) + b);
-				if (y <= 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
-					continue;
-				}
-				u32 *p = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
-				*p = 0xFFFFFFFF;
-			}
+			Assert(SUCCEEDED(hResult));
 		}
-		////////////////////////////////////////
-		////////////////////////////////////////
-#endif
-
-		Win32_CopyBackbufferToScreen(device_context);
 
 		QueryPerformanceCounter(&now);
-		timer_end_tick = now.QuadPart;
-
-		i64 elapsed_ticks = (timer_end_tick - timer_begin_tick);
-		i64 frame_elapsed_time_micros = (elapsed_ticks * 1000000) / ticks_per_second;
-		i64 time_to_sleep_ms = (TARGET_FRAME_TIME_MICROS - frame_elapsed_time_micros) / 1000;
-		if (time_to_sleep > 0) {
-			Sleep((i32)time_to_sleep_ms);
-		}
-		//i64 fps = 1000000 / frame_elapsed_time_us;
-
-/*
-		char fps_message[256] = {0};
-		snprintf(fps_message, sizeof(fps_message), 
-				"%lld us / %lld fps\n", frame_elapsed_time_us, fps);
-		OutputDebugString(fps_message);
-*/
-
+		i64 frame_timer_end_tick = now.QuadPart;
+		
+		i64 elapsed_ticks = (frame_timer_end_tick - frame_timer_begin_tick);
+		f32 frame_elapsed_time_micros = (elapsed_ticks * 1000000.0f) / ticks_per_second;
+		f32 frame_elapsed_time_millis = (frame_elapsed_time_micros / 1000.0f);
+		char frame_time_msg[256] = {0};
+//		snprintf(frame_time_msg, sizeof(frame_time_msg), "Frame: %fms (%fus)\n", 
+//			frame_elapsed_time_millis, frame_elapsed_time_micros);
+		OutputDebugStringA(frame_time_msg);
 	}
+	
+	// CRT not present, so have to manually exit process here
+	ExitProcess(0);
 
     return 0;
 }
+
