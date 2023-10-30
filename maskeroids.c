@@ -8,7 +8,6 @@
 #include <stdlib.h> // srand, rand
 #include <stdio.h> // snprintf
 
-
 // COMPLETE:
 // - Open window with default size of 800x600 and title "Maskeroids"
 // - Set background color to gray
@@ -428,6 +427,64 @@ void DrawRectangle(DrawSurface *surface, i32 offset_x, i32 offset_y, i32 rectang
 	}
 }
 
+void DrawLine(DrawSurface *surface, Point p1, Point p2, u32 color) {
+	f32 min_x = my_min(p2.x, p1.x);
+	f32 max_x = my_max(p2.x, p1.x);
+	f32 min_y = my_min(p2.y, p1.y);
+	f32 max_y = my_max(p2.y, p1.y);
+	
+	if (p1.x == p2.x) {
+		// vertical line
+		i32 miny = my_floor(min_y);
+		i32 maxy = my_ceil(max_y);
+		i32 x = RoundNearest(p1.x);
+		for (i32 y = miny; y < maxy; y++) {
+			if (y <= 0 || y >= surface->height) {
+				continue;
+			}
+			u32 *p = surface->pixels + x + (y * surface->width);
+			*p = color;
+		}
+	} else if (p1.y == p2.y) {
+		// horizontal line
+		i32 int_min_x = RoundNearest(min_x);
+		i32 int_max_x = RoundNearest(max_x);
+		i32 y_value = RoundNearest(p2.y);
+		for (i32 x = int_min_x; x <= int_max_x; x++) {
+			*(surface->pixels + x + (y_value * surface->width)) = color;
+		}
+	} else {
+		f32 m = (p1.y - p2.y)/(p1.x - p2.x);
+		f32 b = p2.y - m * p2.x;		
+
+		// NOTE: Calculate pixels for both x and y because if the slope
+		//       be is too small the generated points will be too spread
+		//       far a part which is not desirable.
+		
+		for (f32 y = min_y; y <= max_y; y += 1.0f) {
+			f32 x = ((f32)y - b) / m;
+			if (x < min_x || x > max_x) {
+				continue;
+			}
+			i32 actual_x = RoundNearest(x);
+			i32 actual_y = RoundNearest(y);
+			u32 *p = surface->pixels + actual_x + (actual_y * surface->width);
+			*p = color;			
+		}
+		
+		for (f32 x = min_x; x <= max_x; x += 1.0f) {
+			f32 y = (m*x) + b;
+			if (y < min_y || y > max_y) {
+				continue;
+			}
+			i32 actual_x = RoundNearest(x);
+			i32 actual_y = RoundNearest(y);
+			u32 *p = surface->pixels + actual_x + (actual_y * surface->width);
+			*p = color;			
+		}
+	}
+}
+
 #define MISSILE_POOL_SIZE 16
 #define MISSILE_WIDTH 4.0f
 #define MISSILE_HEIGHT 8.0f
@@ -442,7 +499,7 @@ typedef struct {
 
 void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface) {
 	if (!state->initialized) {
-		i32 num_meteors = rand() % METEOR_POOL_SIZE;
+		i32 num_meteors = 0;//rand() % METEOR_POOL_SIZE;
 		for (i32 i = 0; i < num_meteors; i++) {
 			Meteor *m = state->meteor_pool + i;
 			m->pos.x = (rand() % surface->width);
@@ -608,19 +665,18 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	// Clear background
 	DrawRectangle(surface, 0, 0, surface->width, surface->height, BACKGROUND_COLOR);
 
-	// Draw Ship
-	Extents e = CalculateExtents((Point*)&ship_triangle, 3);
-	e.min_x = max_i32(0, e.min_x);
-	e.max_x = min_i32(surface->width - 1, e.max_x);
-	e.min_y = max_i32(0, e.min_y);
-	e.max_y = min_i32(surface->height - 1, e.max_y);
-	for (i32 y = e.min_y; y <= e.max_y; y++) {
-		for (i32 x = e.min_x; x <= e.max_x; x++) {
-			if (isPointInTriangle((f32)x, (f32)y, &ship_triangle)) {
-				u32 *pixel = surface->pixels + x + (y * surface->width);
-				*pixel = SHIP_COLOR;
-			}
+	Point *ship_points = (Point*)&ship_triangle;
+	i32 ship_point_count = 3;
+	for (i32 i = 0; i < ship_point_count; i++) {
+		Point p1 = *(ship_points + i);
+		Point p2 = {0};
+		if (i == ship_point_count - 1) {
+			p2 = *ship_points;
+		} else {
+			p2 = *(ship_points + i + 1);
 		}
+		
+		DrawLine(surface, p1, p2, SHIP_COLOR);
 	}
 	
 	for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
@@ -693,7 +749,7 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		DrawCircle(surface, meteor->radius, meteor->pos.x, meteor->pos.y);
 	}
 	
-	
+		
 
 #if DEBUG_SHIP_FORWARD_VECTOR
 	////////////////////////////////////////
@@ -971,8 +1027,8 @@ int WinMainCRTStartup() {
 		f32 frame_elapsed_time_micros = (elapsed_ticks * 1000000.0f) / ticks_per_second;
 		f32 frame_elapsed_time_millis = (frame_elapsed_time_micros / 1000.0f);
 		char frame_time_msg[256] = {0};
-//		snprintf(frame_time_msg, sizeof(frame_time_msg), "Frame: %fms (%fus)\n", 
-//			frame_elapsed_time_millis, frame_elapsed_time_micros);
+		snprintf(frame_time_msg, sizeof(frame_time_msg), "Frame: %fms (%fus)\n", 
+			frame_elapsed_time_millis, frame_elapsed_time_micros);
 		OutputDebugStringA(frame_time_msg);
 	}
 	
