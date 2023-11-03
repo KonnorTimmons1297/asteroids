@@ -20,11 +20,11 @@
 // - Draw meteor on the screen as a circle
 // - Give the meteor a random radius
 // - Give the meteor a velocity in a random direction
-
-// TODO:
 // - Add Collision detection between ship and the meteor
 // - Add Collision detection between bullet and the meteor
 // - Keep track of score
+
+// TODO:
 // - On collision with bullet, split meteor into a random number of
 //   smaller meteors with random radius all in opposite directions
 // - On collision with ship, game over
@@ -396,21 +396,14 @@ typedef struct {
 } DrawSurface;
 
 void DrawCircle(DrawSurface *surface, i32 radius, i32 pos_x, i32 pos_y) {	
-	for (i32 y = (pos_y - radius); y < (pos_y + radius); y++) {
-		if (y < 0 || y > surface->height) {
+	f32 angle_step = 0.01f;
+	for (f32 angle = 0; angle <= 2 * PI; angle += angle_step) {
+		i32 x = pos_x + my_ceil(radius * my_cos(angle));
+		i32 y = pos_y + my_ceil(radius * my_sin(angle));
+		if (x < 0 || x > surface->width || y < 0 || y > surface->height) {
 			continue;
 		}
-		for (i32 x = (pos_x - radius); x < (pos_x + radius); x++) {
-			if (x < 0 || x > surface->width) {
-				continue;
-			}
-			f32 x_diff = (f32)(x - pos_x);
-			f32 y_diff = (f32)(y - pos_y);
-			i32 distance_from_center = my_ceil(my_sqrt((x_diff * x_diff) + (y_diff * y_diff)));
-			if (distance_from_center <= radius) {
-				*(surface->pixels + x + (y * surface->width)) = 0xFFFFFFFF;
-			}
-		}
+		*(surface->pixels + x + (y * surface->width)) = 0xFFFFFFFF;
 	}
 }
 
@@ -485,6 +478,36 @@ void DrawLine(DrawSurface *surface, Point p1, Point p2, u32 color) {
 	}
 }
 
+Vec2i Subtract(Vec2i a, Vec2i b) {
+	Vec2i result = {0};
+	result.x = a.x - b.x;
+	result.y = a.y - b.y;
+	return result;
+}
+
+f32 Length(Vec2i v) {
+	f32 result = my_sqrt((f32)(v.x*v.x)+(v.y*v.y));
+	return result;
+}
+
+b8 AnyPointsInsideCircle(i32 circle_radius, Vec2i circle_position, Point *points, i32 point_count) {
+	for (i32 i = 0; i < point_count; i++) {
+		Point p = points[i];
+		
+		Vec2i testpoint = {0};
+		testpoint.x = (i32)p.x;
+		testpoint.y = (i32)p.y;
+		
+		Vec2i d = Subtract(circle_position, testpoint); // displacement from center
+		i32 distance_from_center = my_floor(my_sqrt((f32)(d.x*d.x)+(f32)(d.y*d.y)));
+		if (distance_from_center <= circle_radius) {
+			return 1;
+		}
+	}
+	
+	return 0;
+}
+
 #define MISSILE_POOL_SIZE 16
 #define MISSILE_WIDTH 4.0f
 #define MISSILE_HEIGHT 8.0f
@@ -495,17 +518,18 @@ typedef struct {
 	f32 ship_rotation_radians;
 	Missile pool_of_missiles[MISSILE_POOL_SIZE];
 	Meteor meteor_pool[METEOR_POOL_SIZE];
+	i32 score;
 } AsteroidsState;
 
 void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface) {
 	if (!state->initialized) {
-		i32 num_meteors = 0;//rand() % METEOR_POOL_SIZE;
+		i32 num_meteors = 16;//rand() % METEOR_POOL_SIZE;
 		for (i32 i = 0; i < num_meteors; i++) {
 			Meteor *m = state->meteor_pool + i;
 			m->pos.x = (rand() % surface->width);
 			m->pos.y = (rand() % surface->height);
-			m->radius = (rand() % 50);
-			m->speed = 500 + (rand() % 250);
+			m->radius = 25 + (rand() % 25);
+			m->speed = 200 + (rand() % 250);
 			
 			f32 rand1 = (f32)(rand() % 1000);
 			if ((rand() % 10) >= 5) {
@@ -527,6 +551,7 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		
 		state->initialized = 1;
 	}
+	
 	Triangle ship_triangle = {
 		.a = { 0, 0 },
 		.b = { 20, 60 },
@@ -535,7 +560,7 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	
 	//////////////////////////////////////////////
 	/// Apply Rotation
-	///
+		///
 	if (gRotateShipLeft && !gRotateShipRight) {
 		state->ship_rotation_radians -= delta_time * SHIP_ROTATION_STEP;
 	} else if (gRotateShipRight) {
@@ -749,7 +774,44 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		DrawCircle(surface, meteor->radius, meteor->pos.x, meteor->pos.y);
 	}
 	
+	// Collision detection between ship and meteor
+	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+		Meteor *meteor = state->meteor_pool + i;
+		if (!meteor->active) continue;
 		
+		if (AnyPointsInsideCircle(meteor->radius, meteor->pos, ship_points, 3)) {
+			OutputDebugString("You died!\n");	
+		}
+	}
+	
+	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+		Meteor *meteor = state->meteor_pool + i;
+		if (!meteor->active) continue;
+		
+		for (i32 j = 0; j < MISSILE_POOL_SIZE; j++) {
+			Missile *missile = state->pool_of_missiles + j;
+			if (!missile->live) continue;
+			
+			if (AnyPointsInsideCircle(meteor->radius, meteor->pos, missile->points, 4)) {
+				meteor->active = 0;
+				missile->live = 0;
+				state->score += 1;
+				break;
+			}
+		}
+	}
+	
+	
+	i32 active_meteor_count = 0;
+	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+		Meteor *meteor = state->meteor_pool + i;
+		active_meteor_count += meteor->active;
+	}
+	if (active_meteor_count == 0) {
+		OutputDebugString("You won!\n");
+		ExitProcess(0);
+	}
+	
 
 #if DEBUG_SHIP_FORWARD_VECTOR
 	////////////////////////////////////////
@@ -994,10 +1056,10 @@ int WinMainCRTStartup() {
 			i64 elapsed_ticks_since_last_frame = current_tick_count - last_tick_count;
 			f32 time_since_last_frame = (f32)(elapsed_ticks_since_last_frame) / ticks_per_second;
 
-			char time_since_last_frame_msg[256] = {0};
-			snprintf(time_since_last_frame_msg, sizeof(time_since_last_frame_msg),
-				"Delta Time: %fs\n", time_since_last_frame);
-			OutputDebugString(time_since_last_frame_msg);
+//			char time_since_last_frame_msg[256] = {0};
+//			snprintf(time_since_last_frame_msg, sizeof(time_since_last_frame_msg),
+//				"Delta Time: %fs\n", time_since_last_frame);
+//			OutputDebugString(time_since_last_frame_msg);
 
 			last_tick_count = current_tick_count;
 			DrawSurface ds = {0};
@@ -1026,10 +1088,10 @@ int WinMainCRTStartup() {
 		i64 elapsed_ticks = (frame_timer_end_tick - frame_timer_begin_tick);
 		f32 frame_elapsed_time_micros = (elapsed_ticks * 1000000.0f) / ticks_per_second;
 		f32 frame_elapsed_time_millis = (frame_elapsed_time_micros / 1000.0f);
-		char frame_time_msg[256] = {0};
-		snprintf(frame_time_msg, sizeof(frame_time_msg), "Frame: %fms (%fus)\n", 
-			frame_elapsed_time_millis, frame_elapsed_time_micros);
-		OutputDebugStringA(frame_time_msg);
+//		char frame_time_msg[256] = {0};
+//		snprintf(frame_time_msg, sizeof(frame_time_msg), "Frame: %fms (%fus)\n", 
+//			frame_elapsed_time_millis, frame_elapsed_time_micros);
+//		OutputDebugStringA(frame_time_msg);
 	}
 	
 	// CRT not present, so have to manually exit process here
