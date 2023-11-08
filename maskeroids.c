@@ -23,11 +23,11 @@
 // - Add Collision detection between ship and the meteor
 // - Add Collision detection between bullet and the meteor
 // - Keep track of score
-
-// TODO:
 // - On collision with bullet, split meteor into a random number of
 //   smaller meteors with random radius all in opposite directions
 // - On collision with ship, game over
+
+// TODO:
 // - Add Pause menu with quit and restart buttons
 // - Add audio
 // - Generate outline for asteroid
@@ -519,35 +519,57 @@ typedef struct {
 	Missile pool_of_missiles[MISSILE_POOL_SIZE];
 	Meteor meteor_pool[METEOR_POOL_SIZE];
 	i32 score;
+	i32 lives;
+	b8 do_ship_meteor_collision;
+	f32 time_since_last_ship_meteor_collision;
 } AsteroidsState;
+
+void SpawnMeteor(AsteroidsState *state, Vec2i position, i32 radius, i32 speed) {
+	// find inactive meteor
+	// configure the meteor
+	// set the meteor to active
+	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+		Meteor *m = state->meteor_pool + i;
+		if (m->active) continue;
+		m->pos = position;
+		m->radius = radius;
+		m->speed = speed;
+		
+		f32 rand1 = (f32)(rand() % 1000);
+		if ((rand() % 10) >= 5) {
+			rand1 *= -1.0f;
+		}
+		f32 rand2 = (f32)(rand() % 500);
+		if ((rand() % 10) >= 5) {
+			rand2 *= -1.0f;
+		}
+		
+		f32 length = my_sqrt((rand1 * rand1) + (rand2 * rand2));
+		rand1 /= length;
+		rand2 /= length;
+		
+		m->direction.x = rand1;
+		m->direction.y = rand2;
+		
+		m->active = 1;
+		return;
+	}
+	OutputDebugString("Unable to spawn a Meteor, the pool is full!\n");
+}
 
 void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface) {
 	if (!state->initialized) {
-		i32 num_meteors = 16;//rand() % METEOR_POOL_SIZE;
+		i32 num_meteors = 8;//rand() % METEOR_POOL_SIZE;
 		for (i32 i = 0; i < num_meteors; i++) {
-			Meteor *m = state->meteor_pool + i;
-			m->pos.x = (rand() % surface->width);
-			m->pos.y = (rand() % surface->height);
-			m->radius = 25 + (rand() % 25);
-			m->speed = 200 + (rand() % 250);
-			
-			f32 rand1 = (f32)(rand() % 1000);
-			if ((rand() % 10) >= 5) {
-				rand1 *= -1.0f;
-			}
-			f32 rand2 = (f32)(rand() % 500);
-			if ((rand() % 10) >= 5) {
-				rand2 *= -1.0f;
-			}
-			
-			f32 length = my_sqrt((rand1 * rand1) + (rand2 * rand2));
-			rand1 /= length;
-			rand2 /= length;
-			
-			m->direction.x = rand1;
-			m->direction.y = rand2;
-			m->active = 1;
+			Vec2i position = {0};
+			position.x = (rand() % surface->width);
+			position.y = (rand() % surface->height);
+			i32 radius = 20 + (rand() % 30);
+			i32 speed = 200 + (rand() % 250);
+			SpawnMeteor(state, position, radius, speed);
 		}
+		
+		state->lives = 3;
 		
 		state->initialized = 1;
 	}
@@ -775,12 +797,30 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	}
 	
 	// Collision detection between ship and meteor
-	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
-		Meteor *meteor = state->meteor_pool + i;
-		if (!meteor->active) continue;
-		
-		if (AnyPointsInsideCircle(meteor->radius, meteor->pos, ship_points, 3)) {
-			OutputDebugString("You died!\n");	
+	if (state->do_ship_meteor_collision) {
+		for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+			Meteor *meteor = state->meteor_pool + i;
+			if (!meteor->active) continue;
+			
+			if (AnyPointsInsideCircle(meteor->radius, meteor->pos, ship_points, 3)) {
+				state->lives -= 1;
+				state->do_ship_meteor_collision = 0;
+				state->time_since_last_ship_meteor_collision = 0;
+				if (state->lives == 0) {
+					MessageBox(
+						NULL,
+						"You Died! Game Over",
+						"Asteroids!",
+						MB_OK
+					);
+					ExitProcess(0);
+				}
+			}
+		}
+	} else {
+		state->time_since_last_ship_meteor_collision += delta_time;
+		if (state->time_since_last_ship_meteor_collision >= 1.0f) {
+			state->do_ship_meteor_collision = 1;
 		}
 	}
 	
@@ -796,11 +836,18 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 				meteor->active = 0;
 				missile->live = 0;
 				state->score += 1;
+				if (meteor->radius >= 35) {
+					i32 radius = 15 + (rand() % 15);
+					i32 speed = meteor->speed;
+					SpawnMeteor(state, meteor->pos, radius, speed);
+					radius = 15 + (rand() % 15);
+					speed = meteor->speed;
+					SpawnMeteor(state, meteor->pos, radius, speed);
+				}
 				break;
 			}
 		}
 	}
-	
 	
 	i32 active_meteor_count = 0;
 	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
@@ -808,10 +855,14 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		active_meteor_count += meteor->active;
 	}
 	if (active_meteor_count == 0) {
-		OutputDebugString("You won!\n");
+		MessageBox(
+			NULL,
+			"You won! You destoryed all the meteors!",
+			"Asteroids!",
+			MB_OK
+		);
 		ExitProcess(0);
 	}
-	
 
 #if DEBUG_SHIP_FORWARD_VECTOR
 	////////////////////////////////////////
