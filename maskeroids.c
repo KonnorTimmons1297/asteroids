@@ -8,6 +8,9 @@
 #include <stdlib.h> // srand, rand
 #include <stdio.h> // snprintf
 
+#include "base.h"
+#include "kdtf_font.h"
+
 // COMPLETE:
 // - Open window with default size of 800x600 and title "Maskeroids"
 // - Set background color to gray
@@ -35,12 +38,6 @@
 //       different lengths, making a jagged appearance.
 // - Draw bitmaps for the ship, bullet, and meteor
 
-#if DEBUG
-#define Assert(Expression) if(!(Expression)) { __debugbreak(); }
-#else
-#define Assert(Expression) if(!(Expression)) { *(int*)0 = 0; }
-#endif
-
 #define DEFAULT_WINDOW_WIDTH 1280
 #define DEFAULT_WINDOW_HEIGHT 960
 
@@ -48,15 +45,9 @@
 // #define SHIP_COLOR 0xFFFFFFFF
 #define SHIP_COLOR 0xFFFF553B
 
-typedef int i32;
-typedef long long i64;
-typedef unsigned int u32;
-typedef float f32;
-typedef double f64;
-
-typedef char b8;
-
 static i32 gShouldCloseWindow = 0;
+static b8 gPaused = false;
+static KDTF_Font gFont = {0};
 
 typedef struct {
 	f32 x, y;
@@ -71,36 +62,6 @@ Point Centroid(Triangle t) {
 	result.x = (t.a.x + t.b.x + t.c.x) / 3.0f;
 	result.y = (t.a.y + t.b.y + t.c.y) / 3.0f;
 	return result;
-}
-
-int isPointInTriangle(f32 x, f32 y, Triangle *t) {
-	// vector v0
-	f32 v0x = (f32)(t->b.x - t->a.x);
-	f32 v0y = (f32)(t->b.y - t->a.y);
-
-	// vector v1
-	f32 v1x = (f32)(t->c.x - t->a.x);
-	f32 v1y = (f32)(t->c.y - t->a.y);
-
-	// vector v2
-	f32 v2x = x - t->a.x;
-	f32 v2y = y - t->a.y;
-
-	// Calculate barycentric coordinates using cramers rule
-	f32 d00 = (v0x * v0x) + (v0y * v0y); // Dot Product: v0 . v0
-	f32 d01 = (v0x * v1x) + (v0y * v1y); // dot product: v0 . v1
-	f32 d11 = (v1x * v1x) + (v1y * v1y); // dot product: v1 . v1
-	f32 d20 = (v2x * v0x) + (v2y * v0y); // dot product: v2 . v0
-	f32 d21 = (v2x * v1x) + (v2y * v1y); // dot proudct: v2 . v1
-	f32 denom = d00 * d11 - d01 * d01;
-
-	f32 beta = (d11 * d20 - d01 * d21) / denom;
-	f32 gamma = (d00 * d21 - d01 * d20) / denom;
-	f32 alpha = 1.0f - beta - gamma;
-
-	return (alpha >= 0.0 && alpha <= 1.0f) && 
-		   (beta >= 0.0 && beta <= 1.0f) && 
-		   (gamma >= 0.0 && gamma <= 1.0f);
 }
 
 f32 my_max(f32 a, f32 b) {
@@ -143,13 +104,6 @@ i32 my_floor(f32 value) {
 	return result;
 }
 
-i32 Round(f32 value) {
-	i32 truncate = (i32)value;
-	i32 fractional_part = (i32)(value - truncate);
-	i32 result = ((fractional_part >= 0.5f) * (truncate + 1)) + ((fractional_part < 0.5f) * truncate);
-	return result;
-}
-
 typedef struct {
 	f32 x, y;
 } Vec2;
@@ -164,7 +118,6 @@ typedef struct {
 	i32 posX, posY;	
 } Ship;
 
-#define PI 3.14f
 #define DEG2RAD(X) (X * (PI/180.0f))
 #define SHIP_ROTATION_STEP (2*PI)
 #define SHIP_SPEED 250.0f
@@ -282,6 +235,12 @@ LRESULT CALLBACK WindowCallback(
 
 				case VK_SPACE: {
 					gShootMissile = pressed;
+				} break;
+				
+				case VK_ESCAPE: {
+					if (pressed) {
+						gPaused = !gPaused;
+					}
 				} break;
 
 				default: {
@@ -558,6 +517,7 @@ void SpawnMeteor(AsteroidsState *state, Vec2i position, i32 radius, i32 speed) {
 }
 
 void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface) {
+
 	if (!state->initialized) {
 		i32 num_meteors = 8;//rand() % METEOR_POOL_SIZE;
 		for (i32 i = 0; i < num_meteors; i++) {
@@ -572,6 +532,16 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		state->lives = 3;
 		
 		state->initialized = 1;
+	}
+	
+	if (gPaused) {
+		DrawRectangle(surface, 0, 0, surface->width, surface->height, BACKGROUND_COLOR);
+		i32 x = 100;
+		i32 y = 100;
+		char *paused_text = "PAUSED";
+		i32 paused_text_length = (i32)strlen(paused_text);
+		KDTF_DrawText(&gFont, paused_text, paused_text_length, 0xFFFFFFFF, &x, &y, surface->pixels, surface->width, surface->height);
+		return;
 	}
 	
 	Triangle ship_triangle = {
@@ -864,47 +834,99 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		ExitProcess(0);
 	}
 
-#if DEBUG_SHIP_FORWARD_VECTOR
-	////////////////////////////////////////
-	/// Debug Ship Forward Vector
-	///
-
-	// y = mx + b
-	// b = y - mx
-
-//	if (ship_center.x == ship_triangle.b.x) {
-//		// vertical line!
-//		i32 miny = my_floor(my_min(ship_center.y, ship_triangle.b.y));
-//		i32 maxy = my_ceil(my_max(ship_center.y, ship_triangle.b.y));
-//		i32 x = RoundNearest(ship_center.x);
-//		for (i32 y = miny; y < maxy; y++) {
-//			if (y <= 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
-//				continue;
-//			}
-//			u32 *p = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
-//			*p = 0xFFFFFFFF;
-//		}
-//	} else {
-//		f32 m = (ship_center.y - ship_triangle.b.y)/(ship_center.x - ship_triangle.b.x);
-//		f32 b = ship_triangle.b.y - m*ship_triangle.b.x;
-//		i32 forward_min_x = my_floor(my_min(ship_triangle.b.x, ship_center.x));
-//		i32 forward_max_x = my_ceil(my_max(ship_triangle.b.x, ship_center.x));
-
-//		for (i32 x = forward_min_x; x <= forward_max_x; x++) {
-//			i32 y = RoundNearest((m * x) + b);
-//			if (y <= 0 || y >= gBackbuffer.bitmapInfo.bmiHeader.biHeight) {
-//				continue;
-//			}
-//			u32 *p = (u32*)gBackbuffer.pixels + x + (y * gBackbuffer.bitmapInfo.bmiHeader.biWidth);
-//			*p = 0xFFFFFFFF;
-//		}
-//	}
-	////////////////////////////////////////
-	////////////////////////////////////////
-#endif
+	i32 xPos = 50;
+	i32 yPos = 50;
+	
+	char *score_text = "Score: ";
+	i32 score_text_length = (i32)strlen(score_text);
+	KDTF_DrawText(&gFont, score_text, score_text_length, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
+	KDTF_DrawNumber(&gFont, state->score, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
 }
 
+b8 Win32_ReadFile(char *filepath, void **out_bytes, u64 *out_byte_count) {
+	HANDLE file_handle = CreateFileA(
+		filepath, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ, 
+		0, OPEN_EXISTING, 0, 0);
+	
+	if (file_handle == INVALID_HANDLE_VALUE) {
+		wchar_t message[256] = {0};
+		wsprintfW(message, L"CreateFileW(%s) failed with error: %d\n", filepath, GetLastError());
+		OutputDebugStringW(message);
+		return false;
+	}
+	
+	LARGE_INTEGER file_size;
+	if (!GetFileSizeEx(file_handle, &file_size)) {
+		wchar_t message[256] = {0};
+		wsprintfW(message, L"ReadFile(%s) failed with error: %d\n", filepath, GetLastError());
+		OutputDebugStringW(message);
+		CloseHandle(file_handle);
+		return false;
+	}
+	
+	Assert(file_size.QuadPart >= 0);
+
+	if (file_size.QuadPart == 0) {
+		CloseHandle(file_handle);
+		// the file is empty!
+		return true;
+	}
+	
+	u8 *file_contents = (u8*)VirtualAlloc(0, file_size.QuadPart, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+	Assert(file_contents != NULL);
+	
+	BOOL read_file = ReadFile(file_handle, file_contents, (DWORD)file_size.QuadPart, NULL, NULL);
+	
+	if (!read_file) {
+		OutputDebugStringW(L"Failed to read file!\n");
+		CloseHandle(file_handle);
+		VirtualFree(file_contents, file_size.QuadPart, MEM_RELEASE);
+		return false;
+	}
+
+	CloseHandle(file_handle);
+
+	*out_byte_count = file_size.QuadPart;
+	*out_bytes = file_contents;
+
+	return true;
+}
+
+void *MyAlloc(u64 size) {
+	return VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+}
+
+void MyFree(void *ptr) {
+	VirtualFree(ptr, 0, MEM_RELEASE);
+}
+
+#define CHARACTER_COUNT 93
+
 int WinMainCRTStartup() {
+	void *font_file_contents = 0;
+	u64 font_file_size_bytes = 0;
+	if (!Win32_ReadFile("JetBrainsMono-Regular.ttf", &font_file_contents, &font_file_size_bytes)) {
+		MessageBox(NULL, "Failed to load font file!", "Font Error", MB_OK);
+		ExitProcess(1);
+	}
+	
+	char character_set[CHARACTER_COUNT] = {0};
+	for (i32 i = 0; i < CHARACTER_COUNT; i++) {
+		character_set[i] = '!' + i;
+	}
+	
+	gFont = KDTF_AllocateFont(
+		"JetBrainsMono-Regular.ttf", character_set, true,
+		false, 32.0f, 32.0f, 32.0f, 1.0f,
+		MyAlloc, MyFree,
+		MyAlloc, MyFree);
+	if (gFont.load_error) {
+		MessageBox(NULL, "Failed to parse font file!", "Font Error", MB_OK);
+		ExitProcess(1);
+	}
+	
+	
+	
 	HINSTANCE hInstance = GetModuleHandle(0);
 
 	wchar_t *window_class_name = L"Maskeroids_Window_class";
