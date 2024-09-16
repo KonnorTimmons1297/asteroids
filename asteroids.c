@@ -1,15 +1,22 @@
+#pragma warning(push, 1)
 #define COBJMACROS
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi1_3.h>
+#include <dxgidebug.h>
 
 #include <intrin.h> // ceil, float, min, max
 #include <stdlib.h> // srand, rand
 #include <stdio.h> // snprintf
+#include <time.h>
+
+#include "kdtf_font.h"
+#pragma warning(pop)
 
 #include "base.h"
-#include "kdtf_font.h"
+
 
 // COMPLETE:
 // - Open window with default size of 800x600 and title "Maskeroids"
@@ -45,6 +52,11 @@
 // #define SHIP_COLOR 0xFFFFFFFF
 #define SHIP_COLOR 0xFFFF553B
 
+static i32 WindowWidth = DEFAULT_WINDOW_WIDTH;
+static i32 WindowHeight = DEFAULT_WINDOW_HEIGHT;
+static i32 MouseX = 0;
+static i32 MouseY = 0;
+static b8 MouseLeftButtonDown = 0;
 static i32 gShouldCloseWindow = 0;
 static b8 gPaused = false;
 static KDTF_Font gFont = {0};
@@ -223,42 +235,49 @@ LRESULT CALLBACK WindowCallback(
 			switch (wParam) {
 				case VK_LEFT: {
 					gRotateShipLeft = pressed;
+					return 0;
 				} break;
 
 				case VK_RIGHT: {
 					gRotateShipRight = pressed;
+					return 0;
 				} break;
 
 				case VK_UP: {
 					gMoveShipForward = pressed;
+					return 0;
 				} break;
 
 				case VK_SPACE: {
 					gShootMissile = pressed;
+					return 0;
 				} break;
 				
 				case VK_ESCAPE: {
 					if (pressed) {
 						gPaused = !gPaused;
 					}
-				} break;
-
-				default: {
-					return DefWindowProc(window_handle, msg, wParam, lParam);
+					return 0;
 				} break;
 			}
+			return DefWindowProcW(window_handle, msg, wParam, lParam);
+		} break;
+		
+		case WM_LBUTTONDOWN: {
+			MouseLeftButtonDown = 1;
+		} break;
+		
+		case WM_LBUTTONUP: {
+			MouseLeftButtonDown = 0;
 		} break;
 		
 		case WM_DESTROY: {
 			PostQuitMessage(0);
-		} break;
-
-		default: {
-			return DefWindowProc(window_handle, msg, wParam, lParam);
+			return 0;
 		} break;
 	}
 
-	return 0;
+	return DefWindowProcW(window_handle, msg, wParam, lParam);
 }
 
 typedef struct {
@@ -341,7 +360,7 @@ f32 VectorLength(Vec2 v) {
 }
 
 typedef struct {
-	Vec2i pos;
+	Vec2 pos;
 	Vec2 direction;
 	i32 speed;
 	i32 radius;
@@ -354,12 +373,12 @@ typedef struct {
 	i32 height;
 } DrawSurface;
 
-void DrawCircle(DrawSurface *surface, i32 radius, i32 pos_x, i32 pos_y) {	
+void DrawCircle(DrawSurface *surface, i32 radius, f32 pos_x, f32 pos_y) {	
 	f32 angle_step = 0.01f;
 	for (f32 angle = 0; angle <= 2 * PI; angle += angle_step) {
-		i32 x = pos_x + my_ceil(radius * my_cos(angle));
-		i32 y = pos_y + my_ceil(radius * my_sin(angle));
-		if (x < 0 || x > surface->width || y < 0 || y > surface->height) {
+		i32 x = my_ceil(pos_x + (radius * my_cos(angle)));
+		i32 y = my_ceil(pos_y + (radius * my_sin(angle)));
+		if (x < 0 || x > surface->width || y < 0 || y >= surface->height) {
 			continue;
 		}
 		*(surface->pixels + x + (y * surface->width)) = 0xFFFFFFFF;
@@ -377,6 +396,15 @@ void DrawRectangle(DrawSurface *surface, i32 offset_x, i32 offset_y, i32 rectang
 			rectangle_width
 		);
 	}
+}
+
+f32 Clamp(f32 value, f32 min, f32 max) {
+	if (value < min) {
+		return min;
+	} else if (value > max) {
+		return max;	
+	}
+	return value;
 }
 
 void DrawLine(DrawSurface *surface, Point p1, Point p2, u32 color) {
@@ -419,7 +447,7 @@ void DrawLine(DrawSurface *surface, Point p1, Point p2, u32 color) {
 				continue;
 			}
 			i32 actual_x = RoundNearest(x);
-			i32 actual_y = RoundNearest(y);
+			i32 actual_y = RoundNearest(Clamp(y, 0.0f, (f32)surface->height));
 			u32 *p = surface->pixels + actual_x + (actual_y * surface->width);
 			*p = color;			
 		}
@@ -430,15 +458,22 @@ void DrawLine(DrawSurface *surface, Point p1, Point p2, u32 color) {
 				continue;
 			}
 			i32 actual_x = RoundNearest(x);
-			i32 actual_y = RoundNearest(y);
+			i32 actual_y = RoundNearest(Clamp(y, 0.0f, (f32)surface->height));
 			u32 *p = surface->pixels + actual_x + (actual_y * surface->width);
 			*p = color;			
 		}
 	}
 }
 
-Vec2i Subtract(Vec2i a, Vec2i b) {
+Vec2i Subtracti(Vec2i a, Vec2i b) {
 	Vec2i result = {0};
+	result.x = a.x - b.x;
+	result.y = a.y - b.y;
+	return result;
+}
+
+Vec2 Subtract(Vec2 a, Vec2 b) {
+	Vec2 result = {0};
 	result.x = a.x - b.x;
 	result.y = a.y - b.y;
 	return result;
@@ -449,15 +484,15 @@ f32 Length(Vec2i v) {
 	return result;
 }
 
-b8 AnyPointsInsideCircle(i32 circle_radius, Vec2i circle_position, Point *points, i32 point_count) {
+b8 AnyPointsInsideCircle(i32 circle_radius, Vec2 circle_position, Point *points, i32 point_count) {
 	for (i32 i = 0; i < point_count; i++) {
 		Point p = points[i];
 		
-		Vec2i testpoint = {0};
-		testpoint.x = (i32)p.x;
-		testpoint.y = (i32)p.y;
+		Vec2 testpoint = {0};
+		testpoint.x = p.x;
+		testpoint.y = p.y;
 		
-		Vec2i d = Subtract(circle_position, testpoint); // displacement from center
+		Vec2 d = Subtract(circle_position, testpoint); // displacement from center
 		i32 distance_from_center = my_floor(my_sqrt((f32)(d.x*d.x)+(f32)(d.y*d.y)));
 		if (distance_from_center <= circle_radius) {
 			return 1;
@@ -467,48 +502,86 @@ b8 AnyPointsInsideCircle(i32 circle_radius, Vec2i circle_position, Point *points
 	return 0;
 }
 
+typedef char Flag;
+#define FLAG_UNSET 0;
+#define FLAG_SET 1;
+
 #define MISSILE_POOL_SIZE 16
 #define MISSILE_WIDTH 4.0f
 #define MISSILE_HEIGHT 8.0f
 #define METEOR_POOL_SIZE 32
-typedef struct {
-	b8 initialized;
-	Vec2 ship_pos;
-	f32 ship_rotation_radians;
-	Missile pool_of_missiles[MISSILE_POOL_SIZE];
-	Meteor meteor_pool[METEOR_POOL_SIZE];
-	i32 score;
-	i32 lives;
-	b8 do_ship_meteor_collision;
-	f32 time_since_last_ship_meteor_collision;
-} AsteroidsState;
 
-void SpawnMeteor(AsteroidsState *state, Vec2i position, i32 radius, i32 speed) {
+Missile Missiles[MISSILE_POOL_SIZE];
+Meteor Meteors[METEOR_POOL_SIZE];	
+
+static Flag Flag_Initialized = FLAG_UNSET;
+static Flag Flag_DrawShip = FLAG_SET;
+static b8 PlayerDead = 0;
+static b8 GameOver = 0;
+static u32 PlayerLives = 3;
+static i32 Score = 0;
+static f32 TimeSincePlayerDied = 0.0f;
+static f32 TimeSinceLastDrawShipFlagFlipped = 0.0f;
+static Vec2 ShipPosition = {0};
+static Vec2 ShipVelocity = {0};
+static f32 ShipRotationRadians = 0.0f;
+
+Flag RandomInitialized = FLAG_UNSET;
+
+i32 GenerateRandomNumber(i32 min, i32 max) {
+	if (!RandomInitialized) {
+		srand((u32)time(0));
+		RandomInitialized = FLAG_SET;
+	}
+	i32 random_number = (rand() % (max - min + 1)) + min;
+	return random_number;
+}
+
+#include "stdarg.h"
+#include "stdio.h"
+
+static void Platform_WriteConsole(char *format, ...) {
+	va_list args;
+	va_start(args, format);
+	char msg[1024] = {0};
+	vsprintf_s(msg, 1024, format, args);
+	OutputDebugString(msg);
+	va_end(args);
+}
+
+void SpawnMeteor(Vec2 position, i32 radius, i32 speed) {
 	// find inactive meteor
 	// configure the meteor
 	// set the meteor to active
 	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
-		Meteor *m = state->meteor_pool + i;
+		Meteor *m = Meteors + i;
 		if (m->active) continue;
+		
 		m->pos = position;
 		m->radius = radius;
 		m->speed = speed;
 		
-		f32 rand1 = (f32)(rand() % 1000);
-		if ((rand() % 10) >= 5) {
-			rand1 *= -1.0f;
-		}
-		f32 rand2 = (f32)(rand() % 500);
-		if ((rand() % 10) >= 5) {
-			rand2 *= -1.0f;
+		
+		
+		f32 rand_x = (f32)GenerateRandomNumber(0, 1000);
+		if (GenerateRandomNumber(0, 10) >= 5) {
+			rand_x *= -1.0f;
 		}
 		
-		f32 length = my_sqrt((rand1 * rand1) + (rand2 * rand2));
-		rand1 /= length;
-		rand2 /= length;
+		f32 rand_y = (f32)GenerateRandomNumber(0, 1000);
+		if (GenerateRandomNumber(0, 10) >= 5) {
+			rand_y *= -1.0f;
+		}
 		
-		m->direction.x = rand1;
-		m->direction.y = rand2;
+		f32 length = my_sqrt((rand_x * rand_x) + (rand_y * rand_y));
+		rand_x /= length;
+		rand_y /= length;
+		
+		m->direction.x = rand_x;
+		m->direction.y = rand_y;
+		
+		Platform_WriteConsole("SpawnMeteor() Dir: x=%f y=%f\n", m->direction.x,
+			m->direction.y);
 		
 		m->active = 1;
 		return;
@@ -516,52 +589,185 @@ void SpawnMeteor(AsteroidsState *state, Vec2i position, i32 radius, i32 speed) {
 	OutputDebugString("Unable to spawn a Meteor, the pool is full!\n");
 }
 
-void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface) {
+void DrawString(DrawSurface *surface, char *text, i32 x, i32 y) {
+	i32 text_length = (i32)strlen(text);
+	KDTF_DrawText(&gFont, text, text_length, 0xFFFFFFFF, &x, &y, surface->pixels, surface->width, surface->height);
+}
 
-	if (!state->initialized) {
-		i32 num_meteors = 8;//rand() % METEOR_POOL_SIZE;
-		for (i32 i = 0; i < num_meteors; i++) {
-			Vec2i position = {0};
-			position.x = (rand() % surface->width);
-			position.y = (rand() % surface->height);
-			i32 radius = 20 + (rand() % 30);
-			i32 speed = 200 + (rand() % 250);
-			SpawnMeteor(state, position, radius, speed);
+i32 RoundNearestFloat(f32 value) {
+	i32 floored = Floor(value);
+	if ((value - (f32)floored) < 0.5f) {
+		return floored;
+	} else {
+		return floored + 1;
+	}
+}
+
+void NewLine(i32 *y_coordinate) {
+	i32 new_coordinate = *y_coordinate + gFont.line_height;
+	*y_coordinate = new_coordinate;
+}
+
+b8 MenuButton(DrawSurface *surface, char *text, i32 at_x, i32 at_y) {
+	i32 text_length = (i32)strlen(text);
+	
+	b8 MouseHoveringOverButton = 0;
+	
+	i32 text_width = gFont.atlas.glyph_width * text_length;
+	if (MouseX >= at_x && MouseX <= (at_x + text_width)) {
+		if (MouseY >= at_y && MouseY <= (at_y + gFont.atlas.glyph_height)) {
+			MouseHoveringOverButton = 1;
+		}
+	}
+	
+	u32 TextColor = 0xFFFFFFFF;
+	if (MouseHoveringOverButton) {
+		TextColor = 0xFF3D3D3D;
+	}
+	
+	KDTF_DrawText(&gFont, text, text_length, TextColor, &at_x, &at_y, surface->pixels, surface->width, surface->height);
+	
+	return MouseHoveringOverButton && MouseLeftButtonDown;
+}
+
+static void UpdateAndRender(f32 delta_time, DrawSurface *surface) {
+	/*
+		What could have been done better:
+			* Writing the usage code first
+				- Drawing text on the screen
+				- Clearing the background color			
+			* Use integers for position data instead of floats
+			* Do more calculations on data when looping over an array.
+			  I loop over the missile pool several times, performing
+			  different operations each time. Memory is the slowest thing
+			  you're going to be working with, so take advantage of the 
+			  data when it's already in memory
+			* Instead of using a boolean when there is a list of items,
+			  keep the list of items separate from that boolean value.
+			* Keep instruction level parallelism in mind
+		
+		What should I continue to do:
+			* Using pools when you have several entities of the same type,
+			  marking the entity as either alive/dead.
+			* Don't insert a split between updating and rendering the game
+			  artificially. In this case, the logic was much easier to understand.
+		
+		What I should stop doing:
+			* Don't put things into a global state struct until you need it for
+			  some reason.
+			* Rushing through fixing something
+	*/
+
+	if (!Flag_Initialized) {
+		Flag_DrawShip = FLAG_SET;
+		PlayerDead = 0;
+		PlayerLives = 3;
+		Score = 0;
+		TimeSincePlayerDied = 0.0f;
+		TimeSinceLastDrawShipFlagFlipped = 0.0f;
+	
+		ShipPosition.x = (WindowWidth / 2.0f);
+		ShipPosition.y = (WindowHeight / 2.0f);
+		
+		ShipVelocity.x = 0.0f;
+		ShipVelocity.y = 0.0f;
+		
+		ShipRotationRadians = 0.0f;
+		
+		for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
+			Meteor *m = Meteors + i;
+			m->pos.x = 0.0f;
+			m->pos.y = 0.0f;
+			m->direction.x = 0.0f;
+			m->direction.y = 0.0f;
+			m->speed = 0;
+			m->radius = 0;
+			m->active = 0;
 		}
 		
-		state->lives = 3;
+		i32 NumberOfMeteorsToIntialize = 24;// rand() % METEOR_POOL_SIZE;
+		for (i32 i = 0; i < NumberOfMeteorsToIntialize; i++) {
+			Vec2 position = {0};
+			position.x = (f32)(rand() % surface->width);
+			position.y = (f32)(rand() % surface->height);
+			i32 radius = 20 + (rand() % 30);
+			i32 speed = 150 + (rand() % 100);
+			SpawnMeteor(position, radius, speed);
+		}
 		
-		state->initialized = 1;
+		/*
+			Point points[4];
+			Vec2 direction;
+			i32 live;
+		*/
+		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
+			Missile *m = Missiles + i;
+			for (i32 k = 0; k < 4; k++) {
+				m->points[k].x = 0.0f;
+				m->points[k].y = 0.0f;
+			}
+			m->direction.x = 0.0f;
+			m->direction.y = 0.0f;
+			m->live = 0;
+		}
+		
+		Flag_Initialized = FLAG_SET;
 	}
+
+//	if (!Playing) {
+//		
+//	}
 	
 	if (gPaused) {
 		DrawRectangle(surface, 0, 0, surface->width, surface->height, BACKGROUND_COLOR);
-		i32 x = 100;
-		i32 y = 100;
-		char *paused_text = "PAUSED";
-		i32 paused_text_length = (i32)strlen(paused_text);
-		KDTF_DrawText(&gFont, paused_text, paused_text_length, 0xFFFFFFFF, &x, &y, surface->pixels, surface->width, surface->height);
+		
+//		DrawRectangle(surface, MouseX, MouseY, 5, 5, 0xFFFFFFFF);
+		
+		f32 relative_x = 0.6f;
+		i32 x = my_floor((f32)surface->width * relative_x);
+		f32 relative_y = 0.4f;
+		i32 y = my_floor((f32)surface->height * relative_y);
+		
+		DrawString(surface, "ASTEROIDS!", x, y);
+		
+		NewLine(&y);
+		NewLine(&y);
+		b8 restart_pressed = MenuButton(surface, "Restart", x, y);
+		if (restart_pressed) {
+			Flag_Initialized = FLAG_UNSET;
+			gPaused = 0;
+		}
+		
+		NewLine(&y);
+		NewLine(&y);
+		b8 quit_pressed = MenuButton(surface, "Quit", x, y);
+		if (quit_pressed) ExitProcess(0);
+				
 		return;
 	}
 	
 	Triangle ship_triangle = {
 		.a = { 0, 0 },
-		.b = { 20, 60 },
-		.c = { 40, 0 }
+		.b = { 15, 45 },
+		.c = { 30, 0 }
 	};
+	Point *ship_points = (Point*)&ship_triangle;
+	i32 ship_point_count = 3;
 	
 	//////////////////////////////////////////////
 	/// Apply Rotation
-		///
-	if (gRotateShipLeft && !gRotateShipRight) {
-		state->ship_rotation_radians -= delta_time * SHIP_ROTATION_STEP;
-	} else if (gRotateShipRight) {
-		state->ship_rotation_radians += delta_time * SHIP_ROTATION_STEP;
+	///
+	if (!PlayerDead) {
+		if (gRotateShipLeft && !gRotateShipRight) {
+			ShipRotationRadians -= delta_time * SHIP_ROTATION_STEP;
+		} else if (gRotateShipRight) {
+			ShipRotationRadians += delta_time * SHIP_ROTATION_STEP;
+		}
 	}
 
 	// Use triangle centroid as the center of rotation
 	Point rotation_origin = Centroid(ship_triangle);
-	RotatePoints((Point*)&ship_triangle, 3, rotation_origin, state->ship_rotation_radians);
+	RotatePoints((Point*)&ship_triangle, 3, rotation_origin, ShipRotationRadians);
 	
 	Point ship_center = Centroid(ship_triangle);
 	Vec2 ship_forward_direction = {0};
@@ -578,10 +784,20 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	///////////////////////////////////////////////
 	/// Apply Translation
 	///
-	if (gMoveShipForward) {
-		state->ship_pos.x += (ship_forward_direction.x * (delta_time * SHIP_SPEED));
-		state->ship_pos.y += (ship_forward_direction.y * (delta_time * SHIP_SPEED));
+	ShipVelocity.x *= .9965f;
+	ShipVelocity.y *= .9965f;
+
+	if (!PlayerDead) {	
+		if (gMoveShipForward) {		
+			f32 acceleration = 3.0f; // u/s^2
+	
+			ShipVelocity.x += ship_forward_direction.x * (delta_time * acceleration);
+			ShipVelocity.y += ship_forward_direction.y * (delta_time * acceleration);
+		}
 	}
+	
+	ShipPosition.x += ShipVelocity.x;
+	ShipPosition.y += ShipVelocity.y;
 
 	{
 		Extents e = CalculateExtents((Point*)&ship_triangle, 3);
@@ -590,26 +806,26 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 
 		// don't check <= because ship_pos_x will be equal if
 		// it goes off the right side of the screen
-		if (state->ship_pos.x < -ship_draw_area_width) {
+		if (ShipPosition.x < -ship_draw_area_width) {
 			// went off left side of screen
-			state->ship_pos.x = (f32)(surface->width - 1);
-		} else if (state->ship_pos.x > (surface->width - 1)) {
+			ShipPosition.x = (f32)(surface->width - 1);
+		} else if (ShipPosition.x > (surface->width - 1)) {
 			// went off right side of screen
-			state->ship_pos.x = (f32)-ship_draw_area_width;
+			ShipPosition.x = (f32)-ship_draw_area_width;
 		}
 
 		// don't check <= because ship_pos_y will be equal if
 		// it goes off the top side of the screen
-		if (state->ship_pos.y < -ship_draw_area_height) {
+		if (ShipPosition.y < -ship_draw_area_height) {
 			// ship went off bottom of screen
-			state->ship_pos.y = (f32)(surface->height - 1);
-		} else if (state->ship_pos.y > (surface->height - 1)) {
+			ShipPosition.y = (f32)(surface->height - 1);
+		} else if (ShipPosition.y > (surface->height - 1)) {
 			// ship went off top of screen
-			state->ship_pos.y = (f32)-ship_draw_area_height;
+			ShipPosition.y = (f32)-ship_draw_area_height;
 		}
 	}
 
-	TranslatePoints((Point*)&ship_triangle, 3, state->ship_pos.x, state->ship_pos.y);
+	TranslatePoints((Point*)&ship_triangle, 3, ShipPosition.x, ShipPosition.y);
 
 	ship_center = Centroid(ship_triangle);
 	ship_forward_direction.x = ship_triangle.b.x - ship_center.x;
@@ -617,11 +833,15 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	forward_vector_length = my_sqrt((ship_forward_direction.x*ship_forward_direction.x) + (ship_forward_direction.y*ship_forward_direction.y));
 	ship_forward_direction.x /= forward_vector_length;
 	ship_forward_direction.y /= forward_vector_length;
+
+	//////////////////////////////////////////////
+	//////////////////////////////////////////////
+	
 	///////////////////////////////////////////////
 	///////////////////////////////////////////////
 
 	for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
-		Missile *missile = state->pool_of_missiles + i;
+		Missile *missile = Missiles + i;
 
 		if (!missile->live) continue;
 		
@@ -641,10 +861,10 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		}
 	}
 
-	if (gShootMissile) {
+	if (!PlayerDead && gShootMissile) {
 		Missile *new_missile = 0;
 		for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
-			Missile *m = state->pool_of_missiles + i;
+			Missile *m = Missiles + i;
 			if (!m->live) {
 				new_missile = m;
 				break;
@@ -652,7 +872,7 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		}
 
 		if (new_missile) {
-			// set the missile points(the missile may be reused)
+			// set the missile points(the missile will be reused)
 			new_missile->points[0].x = 0;
 			new_missile->points[0].y = 0;
 			new_missile->points[1].x = 0;
@@ -666,7 +886,7 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 			Point missile_center = {0};
 			missile_center.x = MISSILE_WIDTH / 2.0f;
 			missile_center.y = MISSILE_HEIGHT / 2.0f;
-			RotatePoints(new_missile->points, 4, missile_center, state->ship_rotation_radians);
+			RotatePoints(new_missile->points, 4, missile_center, ShipRotationRadians);
 
 			// put the missile at the tip of the ship
 			TranslatePoints(new_missile->points, 4, ship_triangle.b.x, ship_triangle.b.y);
@@ -680,24 +900,39 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	}
 
 	// Clear background
-	DrawRectangle(surface, 0, 0, surface->width, surface->height, BACKGROUND_COLOR);
+	DrawRectangle(surface, 0, 0, surface->width, surface->height, BACKGROUND_COLOR);	
 
-	Point *ship_points = (Point*)&ship_triangle;
-	i32 ship_point_count = 3;
-	for (i32 i = 0; i < ship_point_count; i++) {
-		Point p1 = *(ship_points + i);
-		Point p2 = {0};
-		if (i == ship_point_count - 1) {
-			p2 = *ship_points;
-		} else {
-			p2 = *(ship_points + i + 1);
+	if (PlayerDead) {
+		TimeSincePlayerDied += delta_time;
+		TimeSinceLastDrawShipFlagFlipped += delta_time;
+	
+		if (TimeSincePlayerDied >= 3.0f) {
+			PlayerDead = 0;
+			Flag_DrawShip = 1;
+			TimeSincePlayerDied = 0.0f;
+			TimeSinceLastDrawShipFlagFlipped = 0.0f;
+		} else if (TimeSinceLastDrawShipFlagFlipped >= 0.3f) {
+			Flag_DrawShip = !Flag_DrawShip;
+			TimeSinceLastDrawShipFlagFlipped = 0.0f;
 		}
-		
-		DrawLine(surface, p1, p2, SHIP_COLOR);
+	}
+	
+	if (Flag_DrawShip) {
+		for (i32 i = 0; i < ship_point_count; i++) {
+			Point p1 = *(ship_points + i);
+			Point p2 = {0};
+			if (i == ship_point_count - 1) {
+				p2 = *ship_points;
+			} else {
+				p2 = *(ship_points + i + 1);
+			}
+			
+			DrawLine(surface, p1, p2, SHIP_COLOR);
+		}
 	}
 	
 	for (i32 i = 0; i < MISSILE_POOL_SIZE; i++) {
-		Missile missile = state->pool_of_missiles[i];
+		Missile missile = Missiles[i];
 		if (!missile.live) continue;
 
 		// constrain how the number of points to check that in a the missile rectangle
@@ -746,73 +981,61 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	}
 
 	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
-		Meteor *meteor = state->meteor_pool + i;
+		Meteor *meteor = Meteors + i;
 		if (!meteor->active) continue;
-		meteor->pos.x += Round(meteor->direction.x * (delta_time * meteor->speed));
-		meteor->pos.y += Round(meteor->direction.y * (delta_time * meteor->speed));
+		meteor->pos.x += meteor->direction.x * (delta_time * meteor->speed);
+		meteor->pos.y += meteor->direction.y * (delta_time * meteor->speed);
 		
 		if ((meteor->pos.x + meteor->radius) <= 0) {
-			meteor->pos.x = surface->width + meteor->radius;
+			meteor->pos.x = (f32)(surface->width + meteor->radius);
 		} else if ((meteor->pos.x - meteor->radius) >= surface->width) {
-			meteor->pos.x = -1 * meteor->radius;
+			meteor->pos.x = (f32)(-1 * meteor->radius);
 		}
 		
 		if ((meteor->pos.y + meteor->radius) <= 0) {
-			meteor->pos.y = surface->height + meteor->radius;
+			meteor->pos.y = (f32)(surface->height + meteor->radius);
 		} else if ((meteor->pos.y - meteor->radius) >= surface->height) {
-			meteor->pos.y = -1 * meteor->radius;
+			meteor->pos.y = (f32)(-1 * meteor->radius);
 		}
 		
 		DrawCircle(surface, meteor->radius, meteor->pos.x, meteor->pos.y);
 	}
 	
 	// Collision detection between ship and meteor
-	if (state->do_ship_meteor_collision) {
+	if (!PlayerDead) {
 		for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
-			Meteor *meteor = state->meteor_pool + i;
+			Meteor *meteor = Meteors + i;
 			if (!meteor->active) continue;
 			
 			if (AnyPointsInsideCircle(meteor->radius, meteor->pos, ship_points, 3)) {
-				state->lives -= 1;
-				state->do_ship_meteor_collision = 0;
-				state->time_since_last_ship_meteor_collision = 0;
-				if (state->lives == 0) {
-					MessageBox(
-						NULL,
-						"You Died! Game Over",
-						"Asteroids!",
-						MB_OK
-					);
-					ExitProcess(0);
+				PlayerDead = 1;
+				PlayerLives -= 1;
+				if (PlayerLives == 0) {
+					GameOver = 1;
 				}
 			}
-		}
-	} else {
-		state->time_since_last_ship_meteor_collision += delta_time;
-		if (state->time_since_last_ship_meteor_collision >= 1.0f) {
-			state->do_ship_meteor_collision = 1;
 		}
 	}
 	
 	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
-		Meteor *meteor = state->meteor_pool + i;
+		Meteor *meteor = Meteors + i;
 		if (!meteor->active) continue;
 		
 		for (i32 j = 0; j < MISSILE_POOL_SIZE; j++) {
-			Missile *missile = state->pool_of_missiles + j;
+			Missile *missile = Missiles + j;
 			if (!missile->live) continue;
 			
 			if (AnyPointsInsideCircle(meteor->radius, meteor->pos, missile->points, 4)) {
 				meteor->active = 0;
 				missile->live = 0;
-				state->score += 1;
+				Score += 1;
 				if (meteor->radius >= 35) {
 					i32 radius = 15 + (rand() % 15);
 					i32 speed = meteor->speed;
-					SpawnMeteor(state, meteor->pos, radius, speed);
+					SpawnMeteor(meteor->pos, radius, speed);
 					radius = 15 + (rand() % 15);
 					speed = meteor->speed;
-					SpawnMeteor(state, meteor->pos, radius, speed);
+					SpawnMeteor(meteor->pos, radius, speed);
 				}
 				break;
 			}
@@ -821,7 +1044,7 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 	
 	i32 active_meteor_count = 0;
 	for (i32 i = 0; i < METEOR_POOL_SIZE; i++) {
-		Meteor *meteor = state->meteor_pool + i;
+		Meteor *meteor = Meteors + i;
 		active_meteor_count += meteor->active;
 	}
 	if (active_meteor_count == 0) {
@@ -834,13 +1057,34 @@ void UpdateAndRender(AsteroidsState *state, f32 delta_time, DrawSurface *surface
 		ExitProcess(0);
 	}
 
-	i32 xPos = 50;
-	i32 yPos = 50;
+	if (GameOver) {
+		f32 relative_x = 0.5f;
+		i32 xPos = my_ceil((f32)surface->width * relative_x);
 	
+		f32 relative_y = 0.5f;
+		i32 yPos = my_ceil((f32)surface->height * relative_y);
+		
+		DrawString(surface, "GAME OVER", xPos, yPos);		
+	}
+	
+	f32 relative_x = 0.05f;
+	i32 xPos = my_ceil((f32)surface->width * relative_x);
+
+	f32 relative_y = 0.05f;
+	i32 yPos = my_ceil((f32)surface->height * relative_y);
+
 	char *score_text = "Score: ";
 	i32 score_text_length = (i32)strlen(score_text);
 	KDTF_DrawText(&gFont, score_text, score_text_length, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
-	KDTF_DrawNumber(&gFont, state->score, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
+	KDTF_DrawNumber(&gFont, Score, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
+
+	xPos = my_ceil((f32)surface->width * relative_x);
+	NewLine(&yPos);
+	
+	char *lives_text = "Lives: ";
+	i32 lives_left_text_length = (i32)strlen(lives_text);
+	KDTF_DrawText(&gFont, lives_text, lives_left_text_length, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
+	KDTF_DrawNumber(&gFont, PlayerLives, 0xFFFFFFFF, &xPos, &yPos, surface->pixels, surface->width, surface->height);
 }
 
 b8 Win32_ReadFile(char *filepath, void **out_bytes, u64 *out_byte_count) {
@@ -912,7 +1156,7 @@ int WinMainCRTStartup() {
 	
 	char character_set[CHARACTER_COUNT] = {0};
 	for (i32 i = 0; i < CHARACTER_COUNT; i++) {
-		character_set[i] = '!' + i;
+		character_set[i] = '!' + (char)i;
 	}
 	
 	gFont = KDTF_AllocateFont(
@@ -925,11 +1169,9 @@ int WinMainCRTStartup() {
 		ExitProcess(1);
 	}
 	
-	
-	
 	HINSTANCE hInstance = GetModuleHandle(0);
 
-	wchar_t *window_class_name = L"Maskeroids_Window_class";
+	wchar_t *window_class_name = L"Asteroids_Window_class";
 	WNDCLASSEXW window_class = {0};
 	window_class.cbSize = sizeof(window_class);
 	window_class.hInstance = hInstance;
@@ -950,7 +1192,7 @@ int WinMainCRTStartup() {
 	HWND window = CreateWindowExW(
 		WS_EX_APPWINDOW,
 		window_class.lpszClassName, // lpClassName
-		L"Maskeroids!", // lpWindowName
+		L"Asteroids!", // lpWindowName
 		WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, // dwStyle
 		CW_USEDEFAULT, // X
 		CW_USEDEFAULT, // Y
@@ -969,13 +1211,11 @@ int WinMainCRTStartup() {
 
 	RECT client_rect = {0};
 	GetClientRect(window, &client_rect);
-	i32 window_width = DEFAULT_WINDOW_WIDTH;
-	i32 window_height = DEFAULT_WINDOW_HEIGHT;
 
 	DXGI_SWAP_CHAIN_DESC swap_chain_description = {
 		.BufferDesc = {
-			.Width = window_width,
-			.Height = window_height,
+			.Width = WindowWidth,
+			.Height = WindowHeight,
 			.RefreshRate = { 60, 1 },
 			.Format = DXGI_FORMAT_B8G8R8A8_UNORM
 		},
@@ -1035,7 +1275,24 @@ int WinMainCRTStartup() {
 		}
 	}
 	
-	ID3D11Texture2D *backbuffer = NULL;
+	{
+		ID3D11InfoQueue *info_queue;
+		ID3D11Device_QueryInterface(d3d11_device, &IID_ID3D11InfoQueue, (void**)&info_queue);
+		ID3D11InfoQueue_SetBreakOnSeverity(info_queue, D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+		ID3D11InfoQueue_SetBreakOnSeverity(info_queue, D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
+		ID3D11InfoQueue_Release(info_queue);
+	}
+	
+	{
+		IDXGIInfoQueue *info_queue;
+		hResult = DXGIGetDebugInterface1(0, &IID_IDXGIInfoQueue, (void**)&info_queue);
+		Assert(SUCCEEDED(hResult));
+		IDXGIInfoQueue_SetBreakOnSeverity(info_queue, DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+		IDXGIInfoQueue_SetBreakOnSeverity(info_queue, DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR, TRUE);
+		IDXGIInfoQueue_Release(info_queue);
+	}
+	
+	ID3D11Texture2D *gpubuffer = NULL;
 	ID3D11Texture2D *cpubuffer = NULL;
 
 	ShowWindow(window, SW_SHOW);
@@ -1043,11 +1300,8 @@ int WinMainCRTStartup() {
 	LARGE_INTEGER now = {0};
 	LARGE_INTEGER performance_freq = {0};
 	QueryPerformanceFrequency(&performance_freq);
-	i64 ticks_per_second = performance_freq.QuadPart;
-	
-	AsteroidsState asteroids = {0};
-	asteroids.ship_pos.x = (window_width / 2.0f);
-	asteroids.ship_pos.y = (window_height / 2.0f);
+//	i64 ticks_per_second = performance_freq.QuadPart;
+
 
 #define TARGET_FRAME_TIME_MICROS (1000000/60)
 
@@ -1056,13 +1310,13 @@ int WinMainCRTStartup() {
 	QueryPerformanceCounter(&now);
 	i64 last_tick_count = now.QuadPart;
 	
+	u32 *pixels = 0;
+	u32 cpu_buffer_width = WindowWidth;
+	
 	srand((u32)now.QuadPart);
 
 	MSG msg = {0};
-	while (!gShouldCloseWindow) {		
-		QueryPerformanceCounter(&now);
-		i64 frame_timer_begin_tick = now.QuadPart;
-		
+	while (!gShouldCloseWindow) {
 		while (PeekMessageA(&msg, window, 0, 0, PM_REMOVE)) {
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
@@ -1072,32 +1326,32 @@ int WinMainCRTStartup() {
 		i32 new_width = client_rect.right;
 		i32 new_height = client_rect.bottom;
 
-		b8 window_resized = window_width != new_width || window_height != new_height;
+		b8 window_resized = WindowWidth != new_width || WindowHeight != new_height;
 		if (window_resized && !d3d11_initialized) {
-			if (backbuffer) {
-				ID3D11Texture2D_Release(backbuffer);
+			if (gpubuffer) {
+				ID3D11Texture2D_Release(gpubuffer);
 			}
 			if (cpubuffer) {
 				ID3D11Texture2D_Release(cpubuffer);
 			}
-			backbuffer = NULL;
+			gpubuffer = NULL;
 			cpubuffer = NULL;
 
-			window_width = new_width;
-			window_height = new_height;
+			WindowWidth = new_width;
+			WindowHeight = new_height;
 
-			b8 window_is_not_minimized = !(window_width == 0 || window_height == 0);
-				if (window_is_not_minimized) {
+			b8 window_is_not_minimized = WindowWidth != 0 && WindowHeight != 0;
+			if (window_is_not_minimized) {
 				hResult = IDXGISwapChain_ResizeBuffers(
-					swap_chain, 1, window_width, window_height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+					swap_chain, 1, WindowWidth, WindowHeight, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
 				Assert(SUCCEEDED(hResult));
 
-				hResult = IDXGISwapChain_GetBuffer(swap_chain, 0, &IID_ID3D11Texture2D, (void**)&backbuffer);
+				hResult = IDXGISwapChain_GetBuffer(swap_chain, 0, &IID_ID3D11Texture2D, (void**)&gpubuffer);
 				Assert(SUCCEEDED(hResult));
 
-				D3D11_TEXTURE2D_DESC buffer_description = {
-					.Width = window_width,
-					.Height = window_height,
+				D3D11_TEXTURE2D_DESC cpu_buffer_description = {
+					.Width = WindowWidth,
+					.Height = WindowHeight,
 					.MipLevels = 1,
 					.ArraySize = 1,
 					.Format = DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -1107,60 +1361,86 @@ int WinMainCRTStartup() {
 					.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE
 				};
 
-				hResult = ID3D11Device_CreateTexture2D(d3d11_device, &buffer_description, NULL, &cpubuffer);
+				hResult = ID3D11Device_CreateTexture2D(d3d11_device, &cpu_buffer_description, NULL, &cpubuffer);
 				Assert(SUCCEEDED(hResult));
+				
+				D3D11_MAPPED_SUBRESOURCE cpu_buffer_subresource = {0};
+				hResult = ID3D11DeviceContext_Map(d3d11_device_context, (ID3D11Resource*)cpubuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &cpu_buffer_subresource);
+				Assert(SUCCEEDED(hResult));
+				
+				cpu_buffer_width = cpu_buffer_subresource.RowPitch / sizeof(u32);
+				
+				ID3D11DeviceContext_Unmap(d3d11_device_context, (ID3D11Resource*)cpubuffer, 0);
+				
+				pixels = VirtualAlloc(0, cpu_buffer_width * WindowHeight * sizeof(u32), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+				Assert(pixels);
 			}
 
 			d3d11_initialized = 1;
 		}
 
-		b8 window_visible = window_width && window_height;
+		QueryPerformanceCounter(&now);
+		i64 current_tick_count = now.QuadPart;
+
+//		i64 elapsed_ticks_since_last_frame = current_tick_count - last_tick_count;
+//#pragma warning(disable: 4189)
+//		f32 time_since_last_frame = (f32)(elapsed_ticks_since_last_frame) / ticks_per_second;
+//#pragma warning(default: 4189)
+		
+//		char time_since_last_frame_msg[256] = {0};
+//		snprintf(time_since_last_frame_msg, sizeof(time_since_last_frame_msg),
+//			"Delta Time: %fs\n", time_since_last_frame);
+//		OutputDebugString(time_since_last_frame_msg);
+
+
+		last_tick_count = current_tick_count;
+		
+		POINT cursor = {0};
+		GetCursorPos(&cursor);
+		ScreenToClient(window, &cursor);
+		MouseX = cursor.x;
+		MouseY = cursor.y;
+		
+		Platform_WriteConsole("Mouse: x=%d y=%d\n", MouseX, MouseY);
+
+		DrawSurface ds = {0};
+		ds.pixels = pixels;
+		ds.width = cpu_buffer_width;
+		ds.height = WindowHeight;
+
+		UpdateAndRender(0.003f, &ds);
+
+		b8 window_visible = WindowWidth && WindowHeight;
 		if (window_visible) {
 			D3D11_MAPPED_SUBRESOURCE mapped_resource = {0};
 			hResult = ID3D11DeviceContext_Map(d3d11_device_context, (ID3D11Resource*)cpubuffer, 0,
 				D3D11_MAP_WRITE_DISCARD, 0, &mapped_resource);
 			Assert(SUCCEEDED(hResult));
 
-			u32 texture_width = mapped_resource.RowPitch / sizeof(u32);
-
-			QueryPerformanceCounter(&now);
-			i64 current_tick_count = now.QuadPart;
-
-			i64 elapsed_ticks_since_last_frame = current_tick_count - last_tick_count;
-			f32 time_since_last_frame = (f32)(elapsed_ticks_since_last_frame) / ticks_per_second;
-
-//			char time_since_last_frame_msg[256] = {0};
-//			snprintf(time_since_last_frame_msg, sizeof(time_since_last_frame_msg),
-//				"Delta Time: %fs\n", time_since_last_frame);
-//			OutputDebugString(time_since_last_frame_msg);
-
-			last_tick_count = current_tick_count;
-			DrawSurface ds = {0};
-			ds.pixels = (u32*)mapped_resource.pData;
-			ds.width = texture_width;
-			ds.height = window_height - 1;
-
-			UpdateAndRender(&asteroids, time_since_last_frame, &ds);
+			for (u32 i = 0; i < (cpu_buffer_width * WindowHeight); i++) {
+				((u32*)mapped_resource.pData)[i] = pixels[i];
+			}			
 
 			ID3D11DeviceContext_Unmap(d3d11_device_context, (ID3D11Resource*)cpubuffer, 0);
-			ID3D11DeviceContext_CopyResource(d3d11_device_context, (ID3D11Resource*)backbuffer, 
+			ID3D11DeviceContext_CopyResource(d3d11_device_context, (ID3D11Resource*)gpubuffer, 
 				(ID3D11Resource*)cpubuffer);
 		}
 			
-		hResult = IDXGISwapChain_Present(swap_chain, 1, 0);
+		hResult = IDXGISwapChain_Present(swap_chain, 0, 0);
 		if (hResult == DXGI_STATUS_OCCLUDED) {
 			// window is not visible
 			Sleep(10);
-		} else {
-			Assert(SUCCEEDED(hResult));
+		} else if (!SUCCEEDED(hResult)) {
+			hResult = ID3D11Device_GetDeviceRemovedReason(d3d11_device);
+			Assert(false);
 		}
 
-		QueryPerformanceCounter(&now);
-		i64 frame_timer_end_tick = now.QuadPart;
+//		QueryPerformanceCounter(&now);
+//		i64 frame_timer_end_tick = now.QuadPart;
 		
-		i64 elapsed_ticks = (frame_timer_end_tick - frame_timer_begin_tick);
-		f32 frame_elapsed_time_micros = (elapsed_ticks * 1000000.0f) / ticks_per_second;
-		f32 frame_elapsed_time_millis = (frame_elapsed_time_micros / 1000.0f);
+//		i64 elapsed_ticks = (frame_timer_end_tick - frame_timer_begin_tick);
+//		f32 frame_elapsed_time_micros = (elapsed_ticks * 1000000.0f) / ticks_per_second;
+//		f32 frame_elapsed_time_millis = (frame_elapsed_time_micros / 1000.0f);
 //		char frame_time_msg[256] = {0};
 //		snprintf(frame_time_msg, sizeof(frame_time_msg), "Frame: %fms (%fus)\n", 
 //			frame_elapsed_time_millis, frame_elapsed_time_micros);
@@ -1169,7 +1449,5 @@ int WinMainCRTStartup() {
 	
 	// CRT not present, so have to manually exit process here
 	ExitProcess(0);
-
-    return 0;
 }
 

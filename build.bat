@@ -22,9 +22,9 @@ REM /opt:icf - perform identical code folding, in case multiple functions genera
 REM /opt:ref - remove unreferenced functions/globals
 REM /subsystem:windows - create "gui" executable without console attached
 
-set LIBS=libvcruntime.lib kernel32.lib gdi32.lib user32.lib ucrt.lib d3d11.lib dxguid.lib
-cl ..\maskeroids.c /nologo /W3 /WX /GS- /MTd /Od /Zi /Fe"maskeroids" /link /fixed /incremental:no /opt:icf /opt:ref /subsystem:windows %LIBS%
-move maskeroids.exe ..
+set LIBS=libvcruntime.lib kernel32.lib gdi32.lib user32.lib ucrt.lib d3d11.lib dxguid.lib dxgi.lib
+cl ..\asteroids.c /nologo /W4 /WX /GS- /MTd /Od /Zi /Fe"asteroids" /link /fixed /incremental:no /opt:icf /opt:ref /subsystem:windows %LIBS%
+move asteroids.exe ..
 popd
 
 endlocal
