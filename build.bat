@@ -2,7 +2,7 @@
 
 setlocal
 
-IF EXIST maskeroids.exe del maskeroids.exe
+IF EXIST asteroids.exe del asteroids.exe
 IF NOT EXIST build mkdir build
 
 pushd build
@@ -22,8 +22,17 @@ REM /opt:icf - perform identical code folding, in case multiple functions genera
 REM /opt:ref - remove unreferenced functions/globals
 REM /subsystem:windows - create "gui" executable without console attached
 
-set LIBS=libvcruntime.lib kernel32.lib gdi32.lib user32.lib ucrt.lib d3d11.lib dxguid.lib dxgi.lib
-cl ..\asteroids.c /nologo /W4 /WX /GS- /MTd /Od /Zi /Fe"asteroids" /link /fixed /incremental:no /opt:icf /opt:ref /subsystem:windows %LIBS%
+IF "%1" == "release" ( 
+    echo ===== Building Release Executable =====
+    set CompilerFlags=/nologo /W4 /WX /GS- /MT /Oi /O2 /FC
+) ELSE (
+    echo ===== Building Debug Executable =====
+    REM /fsanitize=address
+    set CompilerFlags=/nologo /W4 /WX /GS- /MTd /Zi /DDEBUG
+)
+
+set LIBS=kernel32.lib user32.lib ucrt.lib d3d11.lib dxguid.lib dxgi.lib
+cl ..\asteroids.c %CompilerFlags% /Fe"asteroids" /link /fixed /incremental:no /opt:icf /opt:ref /subsystem:windows %LIBS%
 move asteroids.exe ..
 popd
 
